@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { gameState } from '$lib/stores/gameState';
 	import { TIME_SPEED_MS, BASE_RATE, BASE_FILL_CHANCE, type TimeSpeed, type RentMarkup, type TenancyPeriod, type Property, type GameDate } from '$lib/types/game';
+	import { calculateDaysRemaining } from '$lib/utils/date';
 
 	let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -66,13 +67,6 @@
 		} else {
 			return BASE_FILL_CHANCE - 1;
 		}
-	}
-
-	function calculateDaysRemaining(currentDate: GameDate, endDate: GameDate): number {
-		// Simple approximation
-		const currentDays = currentDate.year * 365 + currentDate.month * 30 + currentDate.day;
-		const endDays = endDate.year * 365 + endDate.month * 30 + endDate.day;
-		return Math.max(0, endDays - currentDays);
 	}
 
 	onMount(() => {
