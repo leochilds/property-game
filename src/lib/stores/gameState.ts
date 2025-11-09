@@ -148,12 +148,12 @@ function createGameStore() {
 				});
 
 				// Try to fill vacant properties
-				state.player.properties = state.player.properties.map((property) => {
-					if (!property.tenancy) {
-						return tryFillProperty(property, newDate);
-					}
-					return property;
-				});
+                                state.player.properties = state.player.properties.map((property) => {
+                                        if (!property.tenancy && property.vacantSettings.autoRelist) {
+                                                return tryFillProperty(property, newDate);
+                                        }
+                                        return property;
+                                });
 
 				state.gameTime.currentDate = newDate;
 				saveStateToStorage(state);
