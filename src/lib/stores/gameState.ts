@@ -1,10 +1,28 @@
 import { writable } from 'svelte/store';
-import type { GameState, Property, TimeSpeed, GameDate, RentMarkup, TenancyPeriod, Tenancy } from '../types/game';
+import type {
+	GameState,
+	Property,
+	TimeSpeed,
+	GameDate,
+	RentMarkup,
+	TenancyPeriod,
+	Tenancy
+} from '../types/game';
 import { BASE_RATE, BASE_FILL_CHANCE } from '../types/game';
 import { createDate, addDays, addMonths, isAfterOrEqual } from '../utils/date';
 
 const STORAGE_KEY = 'property-game-state';
-const GAME_VERSION = 2;
+const GAME_VERSION = 3;
+
+type PersistedProperty = Omit<Property, 'hasBeenOccupied' | 'hasAttemptedInitialFill'> &
+	Partial<Pick<Property, 'hasBeenOccupied' | 'hasAttemptedInitialFill'>>;
+
+type PersistedGameState = Omit<GameState, 'player'> & {
+	player: {
+		cash: number;
+		properties: PersistedProperty[];
+	};
+};
 
 function createStarterHome(): Property {
 	return {
@@ -17,7 +35,9 @@ function createStarterHome(): Property {
 			rentMarkup: 5,
 			periodMonths: 12,
 			autoRelist: false
-		}
+		},
+		hasBeenOccupied: false,
+		hasAttemptedInitialFill: false
 	};
 }
 
@@ -38,17 +58,46 @@ function createInitialState(): GameState {
 	};
 }
 
+function hasLocalStorage(): boolean {
+	try {
+		return typeof localStorage !== 'undefined';
+	} catch {
+		return false;
+	}
+}
+
+function normalizeProperty(property: PersistedProperty): Property {
+	return {
+		...property,
+		hasBeenOccupied:
+			property.hasBeenOccupied ?? Boolean(property.tenancy || property.totalIncomeEarned > 0),
+		hasAttemptedInitialFill:
+			property.hasAttemptedInitialFill ??
+			Boolean(property.tenancy || property.totalIncomeEarned > 0)
+	};
+}
+
+function normalizeState(state: PersistedGameState): GameState {
+	return {
+		...state,
+		player: {
+			...state.player,
+			properties: state.player.properties.map((property) => normalizeProperty(property))
+		}
+	};
+}
+
 function loadStateFromStorage(): GameState {
-	if (typeof window === 'undefined') {
+	if (!hasLocalStorage()) {
 		return createInitialState();
 	}
 
 	try {
 		const stored = localStorage.getItem(STORAGE_KEY);
 		if (stored) {
-			const parsed = JSON.parse(stored) as GameState;
+			const parsed = JSON.parse(stored) as PersistedGameState;
 			if (parsed.version === GAME_VERSION) {
-				return parsed;
+				return normalizeState(parsed);
 			}
 		}
 	} catch (error) {
@@ -59,13 +108,25 @@ function loadStateFromStorage(): GameState {
 }
 
 function saveStateToStorage(state: GameState): void {
-	if (typeof window === 'undefined') return;
+	if (!hasLocalStorage()) return;
 
 	try {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 	} catch (error) {
 		console.error('Failed to save game state:', error);
 	}
+}
+
+function shouldAttemptToFill(property: Property): boolean {
+	if (property.tenancy) {
+		return false;
+	}
+
+	if (property.vacantSettings.autoRelist) {
+		return true;
+	}
+
+	return !property.hasBeenOccupied && !property.hasAttemptedInitialFill;
 }
 
 function calculateMonthlyRent(property: Property): number {
@@ -100,7 +161,16 @@ function tryFillProperty(property: Property, currentDate: GameDate): Property {
 			startDate: currentDate,
 			endDate: endDate
 		};
-		return { ...property, tenancy };
+		return {
+			...property,
+			tenancy,
+			hasBeenOccupied: true,
+			hasAttemptedInitialFill: true
+		};
+	}
+
+	if (!property.vacantSettings.autoRelist && !property.hasBeenOccupied) {
+		return { ...property, hasAttemptedInitialFill: true };
 	}
 
 	return property;
@@ -148,12 +218,12 @@ function createGameStore() {
 				});
 
 				// Try to fill vacant properties
-                                state.player.properties = state.player.properties.map((property) => {
-                                        if (!property.tenancy && property.vacantSettings.autoRelist) {
-                                                return tryFillProperty(property, newDate);
-                                        }
-                                        return property;
-                                });
+				state.player.properties = state.player.properties.map((property) => {
+					if (shouldAttemptToFill(property)) {
+						return tryFillProperty(property, newDate);
+					}
+					return property;
+				});
 
 				state.gameTime.currentDate = newDate;
 				saveStateToStorage(state);

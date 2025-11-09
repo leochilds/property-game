@@ -87,7 +87,7 @@ describe('Game Store', () => {
 			// Create a property with tenancy
 			const state = get(gameState);
 			const property = state.player.properties[0];
-			
+
 			// Mock an occupied property
 			property.tenancy = {
 				rentMarkup: 5 as RentMarkup,
@@ -95,7 +95,9 @@ describe('Game Store', () => {
 				startDate: createDate(1, 1, 1),
 				endDate: addMonths(createDate(1, 1, 1), 12)
 			};
-			
+			property.hasBeenOccupied = true;
+			property.hasAttemptedInitialFill = true;
+
 			// Calculate expected monthly rent
 			const annualRate = BASE_RATE + property.tenancy.rentMarkup; // 5 + 5 = 10%
 			const annualRent = (property.baseValue * annualRate) / 100; // 1000 * 0.1 = 100
@@ -115,7 +117,7 @@ describe('Game Store', () => {
 
 		it('should not collect rent from vacant properties', () => {
 			// Property is vacant by default
-			
+
 			// Advance to February 1st
 			for (let i = 0; i < 31; i++) {
 				gameState.advanceDay();
@@ -128,7 +130,7 @@ describe('Game Store', () => {
 
 		it('should collect rent from multiple occupied properties', () => {
 			const state = get(gameState);
-			
+
 			// Add another property
 			const property2: Property = {
 				id: 'property-2',
@@ -145,21 +147,25 @@ describe('Game Store', () => {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				hasBeenOccupied: true,
+				hasAttemptedInitialFill: true
 			};
-			
+
 			state.player.properties[0].tenancy = {
 				rentMarkup: 5 as RentMarkup,
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
 				endDate: addMonths(createDate(1, 1, 1), 12)
 			};
-			
+			state.player.properties[0].hasBeenOccupied = true;
+			state.player.properties[0].hasAttemptedInitialFill = true;
+
 			state.player.properties.push(property2);
 
 			// Calculate expected rents
-			const rent1 = (1000 * (BASE_RATE + 5) / 100) / 12; // 8.333...
-			const rent2 = (2000 * (BASE_RATE + 3) / 100) / 12; // 13.333...
+			const rent1 = (1000 * (BASE_RATE + 5)) / 100 / 12; // 8.333...
+			const rent2 = (2000 * (BASE_RATE + 3)) / 100 / 12; // 13.333...
 			const totalRent = rent1 + rent2;
 
 			// Advance to February 1st
@@ -176,7 +182,7 @@ describe('Game Store', () => {
 		it('should clear tenancy when lease ends', () => {
 			const state = get(gameState);
 			const property = state.player.properties[0];
-			
+
 			// Set up a tenancy that ends in 1 month
 			property.tenancy = {
 				rentMarkup: 5 as RentMarkup,
@@ -184,6 +190,8 @@ describe('Game Store', () => {
 				startDate: createDate(1, 1, 1),
 				endDate: createDate(1, 2, 1) // Ends Feb 1
 			};
+			property.hasBeenOccupied = true;
+			property.hasAttemptedInitialFill = true;
 
 			// Advance to February 1st
 			for (let i = 0; i < 31; i++) {
@@ -197,7 +205,7 @@ describe('Game Store', () => {
 		it('should not auto-relist when autoRelist is false', () => {
 			const state = get(gameState);
 			const property = state.player.properties[0];
-			
+
 			property.tenancy = {
 				rentMarkup: 5 as RentMarkup,
 				periodMonths: 12,
@@ -205,6 +213,8 @@ describe('Game Store', () => {
 				endDate: createDate(1, 2, 1)
 			};
 			property.vacantSettings.autoRelist = false;
+			property.hasBeenOccupied = true;
+			property.hasAttemptedInitialFill = true;
 
 			// Advance to February 1st
 			for (let i = 0; i < 31; i++) {
@@ -220,7 +230,7 @@ describe('Game Store', () => {
 		it('should have a chance to fill vacant properties each day', () => {
 			// Mock Math.random to control fill chance
 			const mockRandom = vi.spyOn(Math, 'random');
-			
+
 			// Set random to guarantee a fill (< 3% for markup of 5)
 			mockRandom.mockReturnValue(0.02); // 2% < 3% base fill chance
 
@@ -234,7 +244,7 @@ describe('Game Store', () => {
 
 		it('should not fill property when random roll is too high', () => {
 			const mockRandom = vi.spyOn(Math, 'random');
-			
+
 			// Set random to fail the fill check
 			mockRandom.mockReturnValue(0.95); // 95% > 3% fill chance
 
@@ -255,7 +265,7 @@ describe('Game Store', () => {
 
 			const state = get(gameState);
 			const property = state.player.properties[0];
-			
+
 			expect(property.tenancy).not.toBeNull();
 			expect(property.tenancy?.periodMonths).toBe(24);
 			expect(property.tenancy?.rentMarkup).toBe(5);
@@ -317,7 +327,7 @@ describe('Game Store', () => {
 
 		it('should not affect other properties', () => {
 			const state = get(gameState);
-			
+
 			// Add another property
 			const property2: Property = {
 				id: 'property-2',
@@ -329,7 +339,9 @@ describe('Game Store', () => {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				hasBeenOccupied: false,
+				hasAttemptedInitialFill: false
 			};
 			state.player.properties.push(property2);
 
@@ -406,13 +418,15 @@ describe('Game Calculations', () => {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				hasBeenOccupied: true,
+				hasAttemptedInitialFill: true
 			};
 
 			// BASE_RATE (5) + rentMarkup (5) = 10%
 			// 1000 * 10% = 100 annual
 			// 100 / 12 = 8.333... monthly
-			const expectedMonthly = (1000 * 10 / 100) / 12;
+			const expectedMonthly = (1000 * 10) / 100 / 12;
 
 			// This is tested indirectly through rent collection in the store tests
 			expect(expectedMonthly).toBeCloseTo(8.333, 2);
@@ -429,7 +443,9 @@ describe('Game Calculations', () => {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				hasBeenOccupied: false,
+				hasAttemptedInitialFill: false
 			};
 
 			// Vacant properties don't generate rent
@@ -439,8 +455,8 @@ describe('Game Calculations', () => {
 
 		it('should scale with different base values', () => {
 			// Higher value property should generate proportionally more rent
-			const expectedRent1 = (1000 * 10 / 100) / 12;
-			const expectedRent2 = (2000 * 10 / 100) / 12;
+			const expectedRent1 = (1000 * 10) / 100 / 12;
+			const expectedRent2 = (2000 * 10) / 100 / 12;
 
 			expect(expectedRent2).toBeCloseTo(expectedRent1 * 2, 2);
 		});

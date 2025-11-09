@@ -63,8 +63,11 @@ export function isAfterOrEqual(date1: GameDate, date2: GameDate): boolean {
 }
 
 export function calculateDaysRemaining(currentDate: GameDate, endDate: GameDate): number {
-	// Simple approximation
-	const currentDays = currentDate.year * 365 + currentDate.month * 30 + currentDate.day;
-	const endDays = endDate.year * 365 + endDate.month * 30 + endDate.day;
-	return Math.max(0, endDays - currentDays);
+	const toGameDays = (date: GameDate): number => {
+		const totalMonths = (date.year - 1) * 12 + (date.month - 1);
+		return totalMonths * 30 + (date.day - 1);
+	};
+
+	const difference = toGameDays(endDate) - toGameDays(currentDate);
+	return Math.max(0, difference);
 }
