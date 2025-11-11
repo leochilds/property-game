@@ -36,7 +36,7 @@ describe('Game Store', () => {
 
 			expect(state.player.cash).toBe(0);
 			expect(state.player.properties).toHaveLength(1);
-			expect(state.player.properties[0].name).toBe('Starter Home');
+			expect(state.player.properties[0].name).toBe('2-Bed Terraced House');
 			expect(state.gameTime.currentDate).toEqual({ year: 1, month: 1, day: 1 });
 			expect(state.gameTime.speed).toBe(1);
 			expect(state.gameTime.isPaused).toBe(false);
@@ -46,12 +46,21 @@ describe('Game Store', () => {
 			const state = get(gameState);
 			const property = state.player.properties[0];
 
-			expect(property.baseValue).toBe(1000);
+			expect(property.baseValue).toBeGreaterThan(0); // Value depends on random district modifier
 			expect(property.totalIncomeEarned).toBe(0);
 			expect(property.tenancy).toBeNull();
 			expect(property.vacantSettings.rentMarkup).toBe(5);
 			expect(property.vacantSettings.periodMonths).toBe(12);
 			expect(property.vacantSettings.autoRelist).toBe(false);
+			expect(property.features).toEqual({
+				propertyType: 'terraced',
+				bedrooms: 2,
+				garden: 'small',
+				parking: 'street'
+			});
+			expect(property.district).toBeGreaterThanOrEqual(1);
+			expect(property.district).toBeLessThanOrEqual(10);
+			expect(property.districtModifier).toBeGreaterThan(0);
 		});
 	});
 
@@ -93,12 +102,13 @@ describe('Game Store', () => {
 				rentMarkup: 5 as RentMarkup,
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
-				endDate: addMonths(createDate(1, 1, 1), 12)
+				endDate: addMonths(createDate(1, 1, 1), 12),
+				marketValueAtStart: 1000 // Property at 100% maintenance
 			};
 			
 			// Calculate expected monthly rent
 			const annualRate = BASE_RATE + property.tenancy.rentMarkup; // 5 + 5 = 10%
-			const annualRent = (property.baseValue * annualRate) / 100; // 1000 * 0.1 = 100
+			const annualRent = (property.tenancy.marketValueAtStart * annualRate) / 100; // 1000 * 0.1 = 100
 			const monthlyRent = annualRent / 12; // 100 / 12 = 8.333...
 
 			// Advance to February 1st (day 1 of next month)
@@ -134,25 +144,41 @@ describe('Game Store', () => {
 				id: 'property-2',
 				name: 'Property 2',
 				baseValue: 2000,
+				features: {
+					propertyType: 'detached',
+					bedrooms: 3,
+					garden: 'large',
+					parking: 'garage'
+				},
+				area: 'Uptown',
+				district: 5,
+				districtModifier: 1.0,
 				totalIncomeEarned: 0,
 				tenancy: {
 					rentMarkup: 3 as RentMarkup,
 					periodMonths: 12,
 					startDate: createDate(1, 1, 1),
-					endDate: addMonths(createDate(1, 1, 1), 12)
+					endDate: addMonths(createDate(1, 1, 1), 12),
+					marketValueAtStart: 2000
 				},
 				vacantSettings: {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				maintenance: 100,
+				isUnderMaintenance: false,
+				scheduleMaintenance: false,
+				maintenanceStartDate: null,
+				saleInfo: null
 			};
 			
 			state.player.properties[0].tenancy = {
 				rentMarkup: 5 as RentMarkup,
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
-				endDate: addMonths(createDate(1, 1, 1), 12)
+				endDate: addMonths(createDate(1, 1, 1), 12),
+				marketValueAtStart: 1000
 			};
 			
 			state.player.properties.push(property2);
@@ -182,7 +208,8 @@ describe('Game Store', () => {
 				rentMarkup: 5 as RentMarkup,
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
-				endDate: createDate(1, 2, 1) // Ends Feb 1
+				endDate: createDate(1, 2, 1), // Ends Feb 1
+				marketValueAtStart: 1000
 			};
 
 			// Advance to February 1st
@@ -202,7 +229,8 @@ describe('Game Store', () => {
 				rentMarkup: 5 as RentMarkup,
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
-				endDate: createDate(1, 2, 1)
+				endDate: createDate(1, 2, 1),
+				marketValueAtStart: 1000
 			};
 			property.vacantSettings.autoRelist = false;
 
@@ -323,13 +351,27 @@ describe('Game Store', () => {
 				id: 'property-2',
 				name: 'Property 2',
 				baseValue: 2000,
+				features: {
+					propertyType: 'detached',
+					bedrooms: 3,
+					garden: 'large',
+					parking: 'garage'
+				},
+				area: 'Uptown',
+				district: 5,
+				districtModifier: 1.0,
 				totalIncomeEarned: 0,
 				tenancy: null,
 				vacantSettings: {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				maintenance: 100,
+				isUnderMaintenance: false,
+				scheduleMaintenance: false,
+				maintenanceStartDate: null,
+				saleInfo: null
 			};
 			state.player.properties.push(property2);
 
@@ -395,18 +437,33 @@ describe('Game Calculations', () => {
 				id: 'test',
 				name: 'Test Property',
 				baseValue: 1000,
+				features: {
+					propertyType: 'terraced',
+					bedrooms: 3,
+					garden: 'small',
+					parking: 'street'
+				},
+				area: 'Suburbs',
+				district: 5,
+				districtModifier: 1.0,
 				totalIncomeEarned: 0,
 				tenancy: {
 					rentMarkup: 5 as RentMarkup,
 					periodMonths: 12,
 					startDate: createDate(1, 1, 1),
-					endDate: createDate(1, 1, 1)
+					endDate: createDate(1, 1, 1),
+					marketValueAtStart: 1000
 				},
 				vacantSettings: {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				maintenance: 100,
+				isUnderMaintenance: false,
+				scheduleMaintenance: false,
+				maintenanceStartDate: null,
+				saleInfo: null
 			};
 
 			// BASE_RATE (5) + rentMarkup (5) = 10%
@@ -423,13 +480,27 @@ describe('Game Calculations', () => {
 				id: 'test',
 				name: 'Test Property',
 				baseValue: 1000,
+				features: {
+					propertyType: 'terraced',
+					bedrooms: 3,
+					garden: 'small',
+					parking: 'street'
+				},
+				area: 'Suburbs',
+				district: 5,
+				districtModifier: 1.0,
 				totalIncomeEarned: 0,
 				tenancy: null,
 				vacantSettings: {
 					rentMarkup: 5,
 					periodMonths: 12,
 					autoRelist: false
-				}
+				},
+				maintenance: 100,
+				isUnderMaintenance: false,
+				scheduleMaintenance: false,
+				maintenanceStartDate: null,
+				saleInfo: null
 			};
 
 			// Vacant properties don't generate rent
