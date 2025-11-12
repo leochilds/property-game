@@ -142,7 +142,7 @@ function generateMarketProperty(areas: Area[]): MarketProperty {
 }
 
 function generateInitialMarket(areas: Area[]): MarketProperty[] {
-	const count = Math.floor(Math.random() * 6) + 5; // 5-10 properties
+	const count = MAX_MARKET_PROPERTIES; // Full market of 50 properties
 	return Array.from({ length: count }, () => generateMarketProperty(areas));
 }
 
@@ -152,9 +152,9 @@ function createInitialState(): GameState {
 	
 	return {
 		player: {
-			cash: 0,
+			cash: 5000,
 			accruedInterest: 0,
-			properties: [createStarterHome(areas)]
+			properties: []
 		},
 		settings: {
 			defaultRentMarkup: 5.0 // Default 5% rent markup for all new listings
@@ -956,12 +956,19 @@ function createGameStore() {
 
 				// Sporadically add new market properties (if under cap)
 				if (state.propertyMarket.length < MAX_MARKET_PROPERTIES) {
-					// 5% chance per day to add a new property
+					// 10% chance per day to add a new property
 					const spawnChance = Math.random() * 100;
-					if (spawnChance < 5) {
+					if (spawnChance < 10) {
 						state.propertyMarket.push(generateMarketProperty(state.areas));
 					}
 				}
+
+				// Properties leave the market (other buyers or withdrawn listings)
+				state.propertyMarket = state.propertyMarket.filter(() => {
+					// 5% chance per property to leave the market
+					const exitChance = Math.random() * 100;
+					return exitChance >= 5; // Keep property if roll is >= 5 (95% chance to stay)
+				});
 
 				state.gameTime.currentDate = newDate;
 				saveStateToStorage(state);

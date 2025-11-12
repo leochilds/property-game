@@ -189,7 +189,7 @@ export const MIN_BASE_RATE = 0.1; // Minimum base rate (0.1%)
 export const TARGET_QUARTERLY_INFLATION = 0.5; // Target 2% annually = ~0.5% quarterly
 export const BASE_FILL_CHANCE = 3; // Base chance per day to fill a property (%)
 export const BASE_SALE_CHANCE = 10; // Base chance per day to sell a property (%)
-export const MAX_MARKET_PROPERTIES = 10; // Maximum properties on market at once
+export const MAX_MARKET_PROPERTIES = 50; // Maximum properties on market at once
 export const PROPERTY_BASE_VALUE = 1000; // Base value before feature multipliers
 
 // District names

@@ -3,7 +3,7 @@
 	import { gameState } from '$lib/stores/gameState';
 	import { calculateDaysRemaining, addMonths } from '$lib/utils/date';
 	import { formatCurrency } from '$lib/utils/format';
-	import { BASE_FILL_CHANCE, BASE_SALE_CHANCE } from '$lib/types/game';
+	import { BASE_FILL_CHANCE, BASE_SALE_CHANCE, PROPERTIES_PER_LEVEL } from '$lib/types/game';
 
 	export let property: Property;
 
@@ -296,7 +296,7 @@
 							<option value="">Select estate agent...</option>
 							{#each availableEstateAgents as agent}
 								{@const capacity = agent.assignedProperties.length}
-								{@const maxCapacity = [2, 4, 6, 8, 10][agent.experienceLevel - 1]}
+								{@const maxCapacity = PROPERTIES_PER_LEVEL[agent.experienceLevel]}
 								<option value={agent.id} disabled={capacity >= maxCapacity}>
 									{agent.name} (Lv{agent.experienceLevel}, {capacity}/{maxCapacity})
 								</option>
@@ -331,7 +331,7 @@
 							<option value="">Select caretaker...</option>
 							{#each availableCaretakers as caretaker}
 								{@const capacity = caretaker.assignedProperties.length}
-								{@const maxCapacity = [2, 4, 6, 8, 10][caretaker.experienceLevel - 1]}
+								{@const maxCapacity = PROPERTIES_PER_LEVEL[caretaker.experienceLevel]}
 								<option value={caretaker.id} disabled={capacity >= maxCapacity}>
 									{caretaker.name} (Lv{caretaker.experienceLevel}, {capacity}/{maxCapacity})
 								</option>
