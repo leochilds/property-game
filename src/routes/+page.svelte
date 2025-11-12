@@ -5,6 +5,7 @@
 	import MarketView from '$lib/components/MarketView.svelte';
 	import PortfolioView from '$lib/components/PortfolioView.svelte';
 	import PropertyDetail from '$lib/components/PropertyDetail.svelte';
+	import { formatCurrency } from '$lib/utils/format';
 
 	type View = 'market' | 'portfolio' | 'property-detail';
 	
@@ -44,10 +45,6 @@
 			currentView = 'portfolio';
 			selectedPropertyId = null;
 		}
-	}
-
-	function formatCurrency(amount: number): string {
-		return `£${amount.toFixed(2)}`;
 	}
 
 	function formatDate(date: { year: number; month: number; day: number }): string {

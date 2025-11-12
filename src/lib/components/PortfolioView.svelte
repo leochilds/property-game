@@ -2,6 +2,7 @@
 	import type { Property, District } from '$lib/types/game';
 	import { gameState } from '$lib/stores/gameState';
 	import { calculateDaysRemaining } from '$lib/utils/date';
+	import { formatCurrency } from '$lib/utils/format';
 	import { BASE_RATE, DISTRICT_NAMES } from '$lib/types/game';
 
 	export let onSelectProperty: (propertyId: string) => void;
@@ -38,10 +39,6 @@
 		if (maintenance >= 50) return 'text-yellow-400';
 		if (maintenance >= 25) return 'text-orange-400';
 		return 'text-red-400';
-	}
-
-	function formatCurrency(amount: number): string {
-		return `£${amount.toFixed(2)}`;
 	}
 
 	function getPropertyStateInfo(property: Property): { badge: string; color: string; icon: string } {

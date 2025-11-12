@@ -2,6 +2,7 @@
 	import type { Property, RentMarkup, TenancyPeriod, PropertyType, GardenType, ParkingType, AreaRating } from '$lib/types/game';
 	import { gameState } from '$lib/stores/gameState';
 	import { calculateDaysRemaining, addMonths } from '$lib/utils/date';
+	import { formatCurrency } from '$lib/utils/format';
 	import { BASE_RATE, BASE_FILL_CHANCE, BASE_SALE_CHANCE } from '$lib/types/game';
 
 	export let property: Property;
@@ -107,10 +108,6 @@
 		if (maintenance >= 50) return 'Fair';
 		if (maintenance >= 25) return 'Poor';
 		return 'Critical';
-	}
-
-	function formatCurrency(amount: number): string {
-		return `£${amount.toFixed(2)}`;
 	}
 
 	function formatDate(date: { year: number; month: number; day: number }): string {
