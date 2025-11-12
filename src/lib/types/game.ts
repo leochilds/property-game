@@ -1,5 +1,5 @@
 export type TenancyPeriod = 6 | 12 | 18 | 24 | 36; // months
-export type RentMarkup = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10; // percentage points above base
+export type RentMarkup = number; // 1.0 to 10.0 in 0.1% increments (percentage, not points above base)
 
 export type PropertyType = 'flat' | 'terraced' | 'semi-detached' | 'detached';
 export type Bedrooms = 1 | 2 | 3 | 4 | 5;

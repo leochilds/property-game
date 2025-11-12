@@ -107,7 +107,7 @@ function createStarterHome(areas: Area[]): Property {
 		totalIncomeEarned: 0,
 		tenancy: null,
 		vacantSettings: {
-			rentMarkup: 5,
+			rentMarkup: 5.0,
 			periodMonths: 12
 		},
 		maintenance: 100,
@@ -411,19 +411,16 @@ function saveStateToStorage(state: GameState): void {
 
 function calculateMonthlyRent(property: Property): number {
 	if (!property.tenancy) return 0;
-	const annualRate = property.tenancy.baseRateAtStart + property.tenancy.rentMarkup;
+	const annualRate = property.tenancy.rentMarkup; // Just the markup, no base rate
 	const annualRent = (property.tenancy.marketValueAtStart * annualRate) / 100;
 	return annualRent / 12;
 }
 
 function calculateFillChance(rentMarkup: RentMarkup): number {
-	if (rentMarkup < 5) {
-		return BASE_FILL_CHANCE + 1; // 4%
-	} else if (rentMarkup <= 6) {
-		return BASE_FILL_CHANCE; // 3%
-	} else {
-		return BASE_FILL_CHANCE - 1; // 2%
-	}
+	// Daily rental chance: (1 - currentRate/100)^65
+	// For 10%: (1 - 0.10)^65 = 0.9^65 = 0.106%
+	// For 3%: (1 - 0.03)^65 = 0.97^65 = 13.809%
+	return Math.pow(1 - (rentMarkup / 100), 65) * 100;
 }
 
 function calculateMarketValue(property: Property): number {
@@ -677,10 +674,10 @@ function createGameStore() {
 							let updatedProperty = { ...property };
 							
 							if (adjustment < 0.4) {
-								// Reduce rent markup (min 1)
+								// Reduce rent markup by 0.5% (min 1.0)
 								updatedProperty.vacantSettings = {
 									...updatedProperty.vacantSettings,
-									rentMarkup: Math.max(1, updatedProperty.vacantSettings.rentMarkup - 1) as RentMarkup
+									rentMarkup: Math.max(1.0, updatedProperty.vacantSettings.rentMarkup - 0.5)
 								};
 							} else if (adjustment < 0.8) {
 								// Shorten period
@@ -698,9 +695,9 @@ function createGameStore() {
 									periodMonths: newPeriod
 								};
 							} else {
-								// Do both
+								// Do both: reduce rent by 0.5% and shorten period
 								updatedProperty.vacantSettings = {
-									rentMarkup: Math.max(1, updatedProperty.vacantSettings.rentMarkup - 1) as RentMarkup,
+									rentMarkup: Math.max(1.0, updatedProperty.vacantSettings.rentMarkup - 0.5),
 									periodMonths: (() => {
 										const currentPeriod = updatedProperty.vacantSettings.periodMonths;
 										if (currentPeriod === 36) return 24;
@@ -1050,7 +1047,7 @@ function createGameStore() {
 					totalIncomeEarned: 0,
 					tenancy: null,
 					vacantSettings: {
-						rentMarkup: 5,
+						rentMarkup: 5.0,
 						periodMonths: 12
 					},
 					maintenance: marketProperty.maintenance,

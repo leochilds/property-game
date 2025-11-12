@@ -64,11 +64,11 @@
 	function calculateMonthlyRent(prop: Property): number {
 		if (!prop.tenancy) {
 			const marketValue = calculateMarketValue(prop);
-			const annualRate = $gameState.economy.baseRate + prop.vacantSettings.rentMarkup;
+			const annualRate = prop.vacantSettings.rentMarkup; // Just the markup, no base rate
 			const annualRent = (marketValue * annualRate) / 100;
 			return annualRent / 12;
 		}
-		const annualRate = prop.tenancy.baseRateAtStart + prop.tenancy.rentMarkup;
+		const annualRate = prop.tenancy.rentMarkup; // Just the markup, no base rate
 		const annualRent = (prop.tenancy.marketValueAtStart * annualRate) / 100;
 		return annualRent / 12;
 	}
@@ -80,13 +80,10 @@
 	}
 
 	function calculateFillChance(rentMarkup: RentMarkup): number {
-		if (rentMarkup < 5) {
-			return BASE_FILL_CHANCE + 1;
-		} else if (rentMarkup <= 6) {
-			return BASE_FILL_CHANCE;
-		} else {
-			return BASE_FILL_CHANCE - 1;
-		}
+		// Daily rental chance: (1 - currentRate/100)^65
+		// For 10%: (1 - 0.10)^65 = 0.9^65 = 0.106%
+		// For 3%: (1 - 0.03)^65 = 0.97^65 = 13.809%
+		return Math.pow(1 - (rentMarkup / 100), 65) * 100;
 	}
 
 	function calculateDailySaleChance(prop: Property): number {
@@ -366,7 +363,7 @@
 							{formatCurrency(calculateMonthlyRent(property))}
 						</div>
 						<div class="text-xs text-slate-500">
-							(Base {property.tenancy.baseRateAtStart.toFixed(2)}% + {property.tenancy.rentMarkup}% markup)
+							(Rent rate: {property.tenancy.rentMarkup.toFixed(1)}% at tenancy start)
 						</div>
 					</div>
 					<div>
@@ -546,22 +543,23 @@
 				<div class="space-y-4">
 					<div>
 						<label class="block text-sm text-slate-400 mb-2">
-							Rent Rate (Base {$gameState.economy.baseRate.toFixed(2)}% + Markup)
+							Rent Rate (1.0% - 10.0%)
 						</label>
 						<div class="flex items-center gap-3">
 							<input
 								type="range"
-								min="1"
-								max="10"
+								min="1.0"
+								max="10.0"
+								step="0.1"
 								value={property.vacantSettings.rentMarkup}
 								oninput={(e) => handleVacantSettingsChange(
-									parseInt(e.currentTarget.value) as RentMarkup,
+									parseFloat(e.currentTarget.value),
 									property.vacantSettings.periodMonths
 								)}
 								class="flex-1"
 							/>
-							<span class="font-semibold text-lg w-16 text-center">
-								+{property.vacantSettings.rentMarkup}%
+							<span class="font-semibold text-lg w-20 text-center">
+								{property.vacantSettings.rentMarkup.toFixed(1)}%
 							</span>
 						</div>
 						<div class="mt-2 text-sm">
@@ -569,22 +567,18 @@
 							<span class="ml-2 text-green-400 font-semibold">
 								{formatCurrency(calculateMonthlyRent(property))}
 							</span>
-							<span class="text-slate-500 text-xs ml-2">
-								(Total: {($gameState.economy.baseRate + property.vacantSettings.rentMarkup).toFixed(2)}%)
-							</span>
 						</div>
 						<div class="mt-1 text-sm">
-							<span class="text-slate-400">Fill Chance:</span>
-							<span class="ml-2 font-semibold {
-								calculateFillChance(property.vacantSettings.rentMarkup) > BASE_FILL_CHANCE
-									? 'text-green-400'
-									: calculateFillChance(property.vacantSettings.rentMarkup) < BASE_FILL_CHANCE
-									? 'text-red-400'
-									: 'text-yellow-400'
-							}">
-								{calculateFillChance(property.vacantSettings.rentMarkup)}% per day
+							<span class="text-slate-400">Daily Fill Chance:</span>
+							<span class="ml-2 font-semibold text-yellow-400">
+								{calculateFillChance(property.vacantSettings.rentMarkup).toFixed(3)}%
 							</span>
 						</div>
+						{#if property.vacantSettings.rentMarkup < $gameState.economy.baseRate}
+							<div class="mt-2 bg-yellow-900/30 border border-yellow-600/50 rounded p-2 text-xs text-yellow-300">
+								⚠️ Rental rate ({property.vacantSettings.rentMarkup.toFixed(1)}%) is below base rate ({$gameState.economy.baseRate.toFixed(1)}%)
+							</div>
+						{/if}
 					</div>
 					<div>
 						<label class="block text-sm text-slate-400 mb-2">
