@@ -626,16 +626,32 @@ function createGameStore() {
 				state.player.accruedInterest += dailyInterest;
 				state.gameTime.lastInterestCalculationDate = newDate;
 
-				// Staff experience gain (daily)
-				state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
-					...agent,
-					experiencePoints: agent.experiencePoints + (agent.assignedProperties.length * XP_PER_PROPERTY_PER_DAY)
-				}));
+				// Staff experience gain (daily) - cap at next level threshold
+				state.staff.estateAgents = state.staff.estateAgents.map(agent => {
+					if (agent.experienceLevel >= 6) return agent; // Max level, no more XP
+					
+					const nextLevel = (agent.experienceLevel + 1) as ExperienceLevel;
+					const nextThreshold = EXPERIENCE_THRESHOLDS[nextLevel];
+					const xpGain = agent.assignedProperties.length * XP_PER_PROPERTY_PER_DAY;
+					
+					return {
+						...agent,
+						experiencePoints: Math.min(agent.experiencePoints + xpGain, nextThreshold)
+					};
+				});
 				
-				state.staff.caretakers = state.staff.caretakers.map(caretaker => ({
-					...caretaker,
-					experiencePoints: caretaker.experiencePoints + (caretaker.assignedProperties.length * XP_PER_PROPERTY_PER_DAY)
-				}));
+				state.staff.caretakers = state.staff.caretakers.map(caretaker => {
+					if (caretaker.experienceLevel >= 6) return caretaker; // Max level, no more XP
+					
+					const nextLevel = (caretaker.experienceLevel + 1) as ExperienceLevel;
+					const nextThreshold = EXPERIENCE_THRESHOLDS[nextLevel];
+					const xpGain = caretaker.assignedProperties.length * XP_PER_PROPERTY_PER_DAY;
+					
+					return {
+						...caretaker,
+						experiencePoints: Math.min(caretaker.experiencePoints + xpGain, nextThreshold)
+					};
+				});
 
 				// Estate agent auto-listing
 				state.player.properties = state.player.properties.map((property) => {
@@ -1228,7 +1244,7 @@ function createGameStore() {
 
 				// Check if eligible for promotion
 				const currentLevel = staff.experienceLevel;
-				if (currentLevel >= 5) return state; // Max level
+				if (currentLevel >= 6) return state; // Max level
 				
 				const nextLevel = (currentLevel + 1) as ExperienceLevel;
 				const requiredXP = EXPERIENCE_THRESHOLDS[nextLevel];

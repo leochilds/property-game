@@ -121,7 +121,7 @@ export interface Economy {
 
 // Staff types
 export type StaffType = 'estate-agent' | 'caretaker';
-export type ExperienceLevel = 1 | 2 | 3 | 4 | 5;
+export type ExperienceLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface BaseStaff {
 	id: string;
@@ -281,18 +281,20 @@ export const DISTRICT_BASE_SALARIES: Record<District, number> = {
 
 export const EXPERIENCE_THRESHOLDS: Record<ExperienceLevel, number> = {
 	1: 0,
-	2: 200,
-	3: 1000,   // 200 + 800
-	4: 3400,   // 200 + 800 + 2400
-	5: 9800    // 200 + 800 + 2400 + 6400
+	2: 3640,
+	3: 18250,
+	4: 146000,
+	5: 912500,
+	6: 7300000
 };
 
 export const PROPERTIES_PER_LEVEL: Record<ExperienceLevel, number> = {
 	1: 2,
-	2: 4,
-	3: 6,
-	4: 8,
-	5: 10
+	2: 5,
+	3: 20,
+	4: 50,
+	5: 200,
+	6: 999
 };
 
 export const PROMOTION_BONUS_MULTIPLIER = 2.0;  // 2x current salary one-time

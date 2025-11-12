@@ -38,7 +38,7 @@
 	}
 
 	function canPromote(staff: { experienceLevel: ExperienceLevel; experiencePoints: number; currentSalary: number }): boolean {
-		if (staff.experienceLevel >= 5) return false;
+		if (staff.experienceLevel >= 6) return false;
 		const nextLevel = (staff.experienceLevel + 1) as ExperienceLevel;
 		const requiredXP = EXPERIENCE_THRESHOLDS[nextLevel];
 		const bonus = staff.currentSalary * PROMOTION_BONUS_MULTIPLIER;
@@ -46,13 +46,14 @@
 	}
 
 	function getXPProgress(staff: { experienceLevel: ExperienceLevel; experiencePoints: number }): number {
-		if (staff.experienceLevel >= 5) return 100;
+		if (staff.experienceLevel >= 6) return 100;
 		const nextLevel = (staff.experienceLevel + 1) as ExperienceLevel;
 		const requiredXP = EXPERIENCE_THRESHOLDS[nextLevel];
 		return (staff.experiencePoints / requiredXP) * 100;
 	}
 
 	function getLevelStars(level: ExperienceLevel): string {
+		if (level === 6) return '👑 Elite';
 		return '⭐'.repeat(level);
 	}
 </script>
@@ -137,7 +138,7 @@
 						</div>
 
 						<!-- XP Progress -->
-						{#if agent.experienceLevel < 5}
+						{#if agent.experienceLevel < 6}
 							<div class="mb-3">
 								<div class="flex justify-between text-xs text-slate-400 mb-1">
 									<span>Experience</span>
@@ -152,7 +153,7 @@
 							</div>
 						{:else}
 							<div class="text-center text-sm text-yellow-400 mb-3">
-								★ Max Level ★
+								👑 Elite Level 👑
 							</div>
 						{/if}
 
@@ -255,7 +256,7 @@
 						</div>
 
 						<!-- XP Progress -->
-						{#if caretaker.experienceLevel < 5}
+						{#if caretaker.experienceLevel < 6}
 							<div class="mb-3">
 								<div class="flex justify-between text-xs text-slate-400 mb-1">
 									<span>Experience</span>
@@ -270,7 +271,7 @@
 							</div>
 						{:else}
 							<div class="text-center text-sm text-yellow-400 mb-3">
-								★ Max Level ★
+								👑 Elite Level 👑
 							</div>
 						{/if}
 
