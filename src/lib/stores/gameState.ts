@@ -4,7 +4,7 @@ import { INITIAL_BASE_RATE, MIN_BASE_RATE, TARGET_QUARTERLY_INFLATION, BASE_FILL
 import { createDate, addDays, addMonths, isAfterOrEqual, isNewQuarter, calculateDaysRemaining } from '../utils/date';
 
 const STORAGE_KEY = 'property-game-state';
-const GAME_VERSION = 11;
+const GAME_VERSION = 12;
 
 // Calculate daily interest rate: (1 + (baseRate - 1%)) ^ (1/365) - 1
 // For 5% base rate: (1 + 0.04) ^ (1/365) - 1 ≈ 0.00010738
@@ -155,6 +155,9 @@ function createInitialState(): GameState {
 			cash: 0,
 			accruedInterest: 0,
 			properties: [createStarterHome(areas)]
+		},
+		settings: {
+			defaultRentMarkup: 5.0 // Default 5% rent markup for all new listings
 		},
 		propertyMarket: generateInitialMarket(areas),
 		areas,
@@ -386,6 +389,13 @@ function loadStateFromStorage(): GameState {
 						listedDate: property.listedDate ?? null
 					};
 				});
+				
+				// Version 12: Add global settings
+				if (!(parsed as any).settings) {
+					(parsed as any).settings = {
+						defaultRentMarkup: 5.0
+					};
+				}
 				
 				parsed.version = GAME_VERSION;
 				saveStateToStorage(parsed);
@@ -663,53 +673,45 @@ function createGameStore() {
 					return property;
 				});
 
-				// Estate agent weekly adjustments
+				// Estate agent monthly adjustments
 				state.player.properties = state.player.properties.map((property) => {
 					if (property.assignedEstateAgent && property.listedDate && !property.tenancy) {
 						const daysSinceListed = calculateDaysRemaining(property.listedDate, newDate);
 						
-						if (daysSinceListed >= 7) {
-							// Randomly adjust rent and/or period
-							const adjustment = Math.random();
+						if (daysSinceListed >= 30) {
 							let updatedProperty = { ...property };
 							
-							if (adjustment < 0.4) {
+							// Randomly adjust rent
+							const rentAdjustment = Math.random();
+							if (rentAdjustment < 0.3) {
+								// Increase rent markup by 0.5-1.0% (max 10.0) - testing higher prices
+								const increase = 0.5 + Math.random() * 0.5; // 0.5 to 1.0
+								updatedProperty.vacantSettings = {
+									...updatedProperty.vacantSettings,
+									rentMarkup: Math.min(10.0, updatedProperty.vacantSettings.rentMarkup + increase)
+								};
+							} else if (rentAdjustment < 0.6) {
 								// Reduce rent markup by 0.5% (min 1.0)
 								updatedProperty.vacantSettings = {
 									...updatedProperty.vacantSettings,
 									rentMarkup: Math.max(1.0, updatedProperty.vacantSettings.rentMarkup - 0.5)
 								};
-							} else if (adjustment < 0.8) {
-								// Shorten period
-								const currentPeriod = updatedProperty.vacantSettings.periodMonths;
-								let newPeriod: TenancyPeriod = currentPeriod;
-								
-								if (currentPeriod === 36) newPeriod = 24;
-								else if (currentPeriod === 24) newPeriod = 18;
-								else if (currentPeriod === 18) newPeriod = 12;
-								else if (currentPeriod === 12) newPeriod = 6;
-								// 6 is minimum, don't change
-								
+							}
+							// else: 40% chance to keep rent the same
+							
+							// Also randomly adjust period (independent of rent adjustment)
+							const periodAdjustment = Math.random();
+							if (periodAdjustment < 0.5) {
+								// 50% chance to randomize period
+								const periods: TenancyPeriod[] = [6, 12, 18, 24, 36];
+								const randomPeriod = periods[Math.floor(Math.random() * periods.length)];
 								updatedProperty.vacantSettings = {
 									...updatedProperty.vacantSettings,
-									periodMonths: newPeriod
-								};
-							} else {
-								// Do both: reduce rent by 0.5% and shorten period
-								updatedProperty.vacantSettings = {
-									rentMarkup: Math.max(1.0, updatedProperty.vacantSettings.rentMarkup - 0.5),
-									periodMonths: (() => {
-										const currentPeriod = updatedProperty.vacantSettings.periodMonths;
-										if (currentPeriod === 36) return 24;
-										if (currentPeriod === 24) return 18;
-										if (currentPeriod === 18) return 12;
-										if (currentPeriod === 12) return 6;
-										return 6;
-									})()
+									periodMonths: randomPeriod
 								};
 							}
 							
-							// Reset listedDate for next week's check
+							// Reset listedDate for next month's check
 							updatedProperty.listedDate = newDate;
 							return updatedProperty;
 						}
@@ -900,11 +902,19 @@ function createGameStore() {
 					return property;
 				});
 
-				// Check for tenancy expiration
+				// Check for tenancy expiration and reset rent to global default
 				state.player.properties = state.player.properties.map((property) => {
 					if (property.tenancy && isAfterOrEqual(newDate, property.tenancy.endDate)) {
-						// Tenancy has expired
-						return { ...property, tenancy: null };
+						// Tenancy has expired - reset to global default rent markup
+						return {
+							...property,
+							tenancy: null,
+							vacantSettings: {
+								...property.vacantSettings,
+								rentMarkup: state.settings.defaultRentMarkup
+							},
+							listedDate: null // Clear listing date so estate agent can relist
+						};
 					}
 					return property;
 				});
@@ -1413,6 +1423,13 @@ function createGameStore() {
 					return p;
 				});
 
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		setDefaultRentMarkup: (rentMarkup: RentMarkup) => {
+			update((state) => {
+				state.settings.defaultRentMarkup = rentMarkup;
 				saveStateToStorage(state);
 				return state;
 			});

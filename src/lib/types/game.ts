@@ -156,6 +156,9 @@ export interface GameState {
 		accruedInterest: number;
 		properties: Property[];
 	};
+	settings: {
+		defaultRentMarkup: RentMarkup; // Global target rent for all new listings
+	};
 	propertyMarket: MarketProperty[];
 	areas: Area[];
 	economy: Economy;

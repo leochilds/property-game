@@ -132,7 +132,7 @@
 
 		<!-- Time Controls -->
 		<div class="bg-slate-800 rounded-lg p-6 mb-8 border border-slate-700">
-			<h2 class="text-xl font-bold mb-4">Time Controls</h2>
+			<h2 class="text-xl font-bold mb-4">Game Controls</h2>
 			<div class="flex items-center gap-4 flex-wrap">
 				<button
 					onclick={handleTogglePause}
@@ -172,6 +172,20 @@
 					</button>
 				</div>
 
+				<div class="flex items-center gap-2">
+					<span class="text-slate-400">Default Rent:</span>
+					<input
+						type="number"
+						min="1"
+						max="10"
+						step="0.1"
+						value={$gameState.settings.defaultRentMarkup}
+						onchange={(e) => gameState.setDefaultRentMarkup(parseFloat(e.currentTarget.value))}
+						class="w-20 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+					<span class="text-slate-400">%</span>
+				</div>
+
 				<button
 					onclick={handleReset}
 					class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold transition-colors ml-auto"
@@ -181,6 +195,7 @@
 			</div>
 			<div class="mt-4 text-sm text-slate-400">
 				<p>0.5x = 10 seconds per day | 1x = 2 seconds per day | 5x = 0.5 seconds per day</p>
+				<p class="mt-1">Default Rent: Target rent markup for all properties when they become vacant (estate agents adjust from this baseline)</p>
 			</div>
 		</div>
 
