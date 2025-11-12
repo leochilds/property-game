@@ -3,7 +3,7 @@ import { get } from 'svelte/store';
 import { gameState } from './gameState';
 import { createDate, addMonths } from '../utils/date';
 import type { Property, RentMarkup } from '../types/game';
-import { BASE_RATE, BASE_FILL_CHANCE } from '../types/game';
+import { INITIAL_BASE_RATE, BASE_FILL_CHANCE } from '../types/game';
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -103,11 +103,12 @@ describe('Game Store', () => {
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
 				endDate: addMonths(createDate(1, 1, 1), 12),
-				marketValueAtStart: 1000 // Property at 100% maintenance
+				marketValueAtStart: 1000, // Property at 100% maintenance
+				baseRateAtStart: INITIAL_BASE_RATE
 			};
 			
 			// Calculate expected monthly rent
-			const annualRate = BASE_RATE + property.tenancy.rentMarkup; // 5 + 5 = 10%
+			const annualRate = property.tenancy.baseRateAtStart + property.tenancy.rentMarkup; // 5 + 5 = 10%
 			const annualRent = (property.tenancy.marketValueAtStart * annualRate) / 100; // 1000 * 0.1 = 100
 			const monthlyRent = annualRent / 12; // 100 / 12 = 8.333...
 
@@ -144,6 +145,7 @@ describe('Game Store', () => {
 				id: 'property-2',
 				name: 'Property 2',
 				baseValue: 2000,
+				purchaseBaseValue: 2000,
 				features: {
 					propertyType: 'detached',
 					bedrooms: 3,
@@ -159,7 +161,8 @@ describe('Game Store', () => {
 					periodMonths: 12,
 					startDate: createDate(1, 1, 1),
 					endDate: addMonths(createDate(1, 1, 1), 12),
-					marketValueAtStart: 2000
+					marketValueAtStart: 2000,
+					baseRateAtStart: INITIAL_BASE_RATE
 				},
 				vacantSettings: {
 					rentMarkup: 5,
@@ -178,14 +181,15 @@ describe('Game Store', () => {
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
 				endDate: addMonths(createDate(1, 1, 1), 12),
-				marketValueAtStart: 1000
+				marketValueAtStart: 1000,
+				baseRateAtStart: INITIAL_BASE_RATE
 			};
 			
 			state.player.properties.push(property2);
 
 			// Calculate expected rents
-			const rent1 = (1000 * (BASE_RATE + 5) / 100) / 12; // 8.333...
-			const rent2 = (2000 * (BASE_RATE + 3) / 100) / 12; // 13.333...
+			const rent1 = (1000 * (INITIAL_BASE_RATE + 5) / 100) / 12; // 8.333...
+			const rent2 = (2000 * (INITIAL_BASE_RATE + 3) / 100) / 12; // 13.333...
 			const totalRent = rent1 + rent2;
 
 			// Advance to February 1st
@@ -209,7 +213,8 @@ describe('Game Store', () => {
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
 				endDate: createDate(1, 2, 1), // Ends Feb 1
-				marketValueAtStart: 1000
+				marketValueAtStart: 1000,
+				baseRateAtStart: INITIAL_BASE_RATE
 			};
 
 			// Advance to February 1st
@@ -230,7 +235,8 @@ describe('Game Store', () => {
 				periodMonths: 12,
 				startDate: createDate(1, 1, 1),
 				endDate: createDate(1, 2, 1),
-				marketValueAtStart: 1000
+				marketValueAtStart: 1000,
+				baseRateAtStart: INITIAL_BASE_RATE
 			};
 			property.vacantSettings.autoRelist = false;
 
@@ -351,6 +357,7 @@ describe('Game Store', () => {
 				id: 'property-2',
 				name: 'Property 2',
 				baseValue: 2000,
+				purchaseBaseValue: 2000,
 				features: {
 					propertyType: 'detached',
 					bedrooms: 3,
@@ -401,6 +408,94 @@ describe('Game Store', () => {
 		});
 	});
 
+	describe('Maintenance', () => {
+		it('should complete maintenance after exactly 1 month, not waiting for month boundary', () => {
+			const state = get(gameState);
+			const property = state.player.properties[0];
+			
+			// Give player cash to perform maintenance
+			state.player.cash = 10000;
+			
+			// Start on day 15 of month 1
+			for (let i = 0; i < 14; i++) {
+				gameState.advanceDay();
+			}
+			
+			expect(get(gameState).gameTime.currentDate).toEqual({ year: 1, month: 1, day: 15 });
+			
+			// Perform maintenance on day 15
+			gameState.carryOutMaintenance('starter-home');
+			
+			const afterMaintenanceStart = get(gameState);
+			expect(afterMaintenanceStart.player.properties[0].isUnderMaintenance).toBe(true);
+			expect(afterMaintenanceStart.player.properties[0].maintenanceStartDate).toEqual({ year: 1, month: 1, day: 15 });
+			
+			// Advance 30 days (1 month from Jan 15 should be Feb 15)
+			for (let i = 0; i < 30; i++) {
+				gameState.advanceDay();
+			}
+			
+			const afterMaintenance = get(gameState);
+			// Should now be Feb 15 (or Feb 14 depending on month calculation)
+			expect(afterMaintenance.gameTime.currentDate.month).toBe(2);
+			expect(afterMaintenance.gameTime.currentDate.day).toBeGreaterThanOrEqual(14);
+			expect(afterMaintenance.gameTime.currentDate.day).toBeLessThanOrEqual(15);
+			
+			// Maintenance should be complete - not waiting for March 1st
+			expect(afterMaintenance.player.properties[0].isUnderMaintenance).toBe(false);
+			expect(afterMaintenance.player.properties[0].maintenance).toBe(100);
+			expect(afterMaintenance.player.properties[0].maintenanceStartDate).toBeNull();
+		});
+
+		it('should not complete maintenance before 1 month has passed', () => {
+			const state = get(gameState);
+			
+			state.player.cash = 10000;
+			
+			// Start maintenance on day 1
+			gameState.performMaintenance('starter-home');
+			
+			expect(get(gameState).player.properties[0].isUnderMaintenance).toBe(true);
+			
+			// Advance 29 days (less than 1 month)
+			for (let i = 0; i < 29; i++) {
+				gameState.advanceDay();
+			}
+			
+			const afterPartialWait = get(gameState);
+			// Should still be under maintenance
+			expect(afterPartialWait.player.properties[0].isUnderMaintenance).toBe(true);
+			expect(afterPartialWait.player.properties[0].maintenance).not.toBe(100);
+		});
+
+		it('should complete maintenance and try auto-relist if enabled', () => {
+			const mockRandom = vi.spyOn(Math, 'random');
+			mockRandom.mockReturnValue(0.02); // Guarantee fill
+			
+			const state = get(gameState);
+			state.player.cash = 10000;
+			
+			// Enable auto-relist
+			gameState.setPropertyVacantSettings('starter-home', 5, 12, true);
+			
+			// Perform maintenance
+			gameState.performMaintenance('starter-home');
+			
+			// Advance 1 month
+			for (let i = 0; i < 31; i++) {
+				gameState.advanceDay();
+			}
+			
+			const afterMaintenance = get(gameState);
+			// Maintenance should be complete and property should be filled
+			expect(afterMaintenance.player.properties[0].isUnderMaintenance).toBe(false);
+			expect(afterMaintenance.player.properties[0].maintenance).toBe(100);
+			expect(afterMaintenance.player.properties[0].tenancy).not.toBeNull();
+			
+			mockRandom.mockRestore();
+		});
+	});
+
 	describe('localStorage persistence', () => {
 		it('should save state to localStorage on changes', () => {
 			gameState.advanceDay();
@@ -437,6 +532,7 @@ describe('Game Calculations', () => {
 				id: 'test',
 				name: 'Test Property',
 				baseValue: 1000,
+				purchaseBaseValue: 1000,
 				features: {
 					propertyType: 'terraced',
 					bedrooms: 3,
@@ -452,7 +548,8 @@ describe('Game Calculations', () => {
 					periodMonths: 12,
 					startDate: createDate(1, 1, 1),
 					endDate: createDate(1, 1, 1),
-					marketValueAtStart: 1000
+					marketValueAtStart: 1000,
+					baseRateAtStart: INITIAL_BASE_RATE
 				},
 				vacantSettings: {
 					rentMarkup: 5,
@@ -480,6 +577,7 @@ describe('Game Calculations', () => {
 				id: 'test',
 				name: 'Test Property',
 				baseValue: 1000,
+				purchaseBaseValue: 1000,
 				features: {
 					propertyType: 'terraced',
 					bedrooms: 3,

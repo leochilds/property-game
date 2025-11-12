@@ -2,7 +2,7 @@
 	import type { MarketProperty, PropertyType, GardenType, ParkingType, AreaRating, District } from '$lib/types/game';
 	import { gameState } from '$lib/stores/gameState';
 	import { formatCurrency } from '$lib/utils/format';
-	import { BASE_RATE, DISTRICT_NAMES } from '$lib/types/game';
+	import { DISTRICT_NAMES } from '$lib/types/game';
 
 	let selectedOffers: { [key: string]: number} = {};
 	let selectedDistrict: District | 'all' = 'all';

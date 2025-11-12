@@ -63,12 +63,12 @@ export interface Tenancy {
 	startDate: GameDate;
 	endDate: GameDate;
 	marketValueAtStart: number; // Market value when tenancy began (baseValue * maintenance%)
+	baseRateAtStart: number; // Base rate when tenancy began (locked for duration)
 }
 
 export interface VacantSettings {
 	rentMarkup: RentMarkup;
 	periodMonths: TenancyPeriod;
-	autoRelist: boolean;
 }
 
 export interface SaleInfo {
@@ -81,6 +81,7 @@ export interface Property {
 	id: string;
 	name: string;
 	baseValue: number;
+	purchaseBaseValue: number; // Base value when property was acquired
 	features: PropertyFeatures;
 	area: AreaName;
 	district: District;
@@ -90,9 +91,11 @@ export interface Property {
 	vacantSettings: VacantSettings;
 	maintenance: number; // 0-100, percentage of maintenance level
 	isUnderMaintenance: boolean;
-	scheduleMaintenance: boolean;
 	maintenanceStartDate: GameDate | null;
 	saleInfo: SaleInfo | null; // null = not for sale
+	assignedEstateAgent: string | null; // Staff ID
+	assignedCaretaker: string | null; // Staff ID
+	listedDate: GameDate | null; // When estate agent listed it
 }
 
 export interface MarketProperty {
@@ -105,16 +108,65 @@ export interface MarketProperty {
 	maintenance: number; // 1-100, percentage of maintenance level
 }
 
+export type EconomicPhase = 'recession' | 'recovery' | 'expansion' | 'peak';
+
+export interface Economy {
+	baseRate: number; // Current central bank rate (min 0.1%)
+	inflationRate: number; // Current quarterly inflation rate (can be negative for deflation)
+	economicPhase: EconomicPhase;
+	quarterlyInflationHistory: number[]; // Track last 4 quarters
+	lastQuarterDate: GameDate; // Track when quarters change (every 3 months)
+	quartersSincePhaseChange: number; // Track cycle progression
+}
+
+// Staff types
+export type StaffType = 'estate-agent' | 'caretaker';
+export type ExperienceLevel = 1 | 2 | 3 | 4 | 5;
+
+export interface BaseStaff {
+	id: string;
+	name: string;
+	type: StaffType;
+	district: District;
+	baseSalary: number; // Original salary when hired
+	currentSalary: number; // Current salary (increases with inflation and promotions)
+	highestInflationRate: number; // Track highest inflation rate seen (wages never decrease)
+	experienceLevel: ExperienceLevel;
+	experiencePoints: number;
+	hiredDate: GameDate;
+	assignedProperties: string[]; // Property IDs
+	unpaidWages: number; // Accumulated unpaid wages
+	monthsUnpaid: number; // Number of consecutive months unpaid (quit after 3)
+}
+
+export interface EstateAgent extends BaseStaff {
+	type: 'estate-agent';
+	lastAdjustmentCheck: GameDate; // Track weekly adjustments per property
+}
+
+export interface Caretaker extends BaseStaff {
+	type: 'caretaker';
+}
+
+export type Staff = EstateAgent | Caretaker;
+
 export interface GameState {
 	player: {
 		cash: number;
+		accruedInterest: number;
 		properties: Property[];
 	};
 	propertyMarket: MarketProperty[];
 	areas: Area[];
+	economy: Economy;
+	staff: {
+		estateAgents: EstateAgent[];
+		caretakers: Caretaker[];
+	};
 	gameTime: {
 		currentDate: GameDate;
 		lastRentCollectionDate: GameDate;
+		lastInterestCalculationDate: GameDate;
 		speed: TimeSpeed;
 		isPaused: boolean;
 	};
@@ -129,7 +181,9 @@ export const TIME_SPEED_MS: Record<TimeSpeed, number> = {
 	5: 500      // 0.5 seconds per day
 };
 
-export const BASE_RATE = 5; // Fixed base rate percentage
+export const INITIAL_BASE_RATE = 5; // Starting base rate percentage
+export const MIN_BASE_RATE = 0.1; // Minimum base rate (0.1%)
+export const TARGET_QUARTERLY_INFLATION = 0.5; // Target 2% annually = ~0.5% quarterly
 export const BASE_FILL_CHANCE = 3; // Base chance per day to fill a property (%)
 export const BASE_SALE_CHANCE = 10; // Base chance per day to sell a property (%)
 export const MAX_MARKET_PROPERTIES = 10; // Maximum properties on market at once
@@ -210,6 +264,56 @@ export const ECONOMY_MULTIPLIERS: Record<AreaRating, number> = {
 	4: 1.1,
 	5: 1.2
 };
+
+// Staff constants
+export const DISTRICT_BASE_SALARIES: Record<District, number> = {
+	1: 100,   // Industrial Quarter
+	2: 130,   // Docklands
+	3: 160,   // Old District
+	4: 200,   // Midtown
+	5: 250,   // Riverside District
+	6: 310,   // Garden District
+	7: 380,   // Hillside
+	8: 470,   // Upmarket Heights
+	9: 580,   // Royal Borough
+	10: 700   // Capital
+};
+
+export const EXPERIENCE_THRESHOLDS: Record<ExperienceLevel, number> = {
+	1: 0,
+	2: 200,
+	3: 1000,   // 200 + 800
+	4: 3400,   // 200 + 800 + 2400
+	5: 9800    // 200 + 800 + 2400 + 6400
+};
+
+export const PROPERTIES_PER_LEVEL: Record<ExperienceLevel, number> = {
+	1: 2,
+	2: 4,
+	3: 6,
+	4: 8,
+	5: 10
+};
+
+export const PROMOTION_BONUS_MULTIPLIER = 2.0;  // 2x current salary one-time
+export const PROMOTION_WAGE_INCREASE = 0.2;     // +20% permanent
+export const XP_PER_PROPERTY_PER_DAY = 10;
+export const MAX_UNPAID_MONTHS = 3;
+
+// Staff name generation
+export const STAFF_FIRST_NAMES = [
+	'James', 'Mary', 'Robert', 'Patricia', 'John', 'Jennifer', 'Michael', 'Linda',
+	'David', 'Barbara', 'William', 'Elizabeth', 'Richard', 'Susan', 'Joseph', 'Jessica',
+	'Thomas', 'Sarah', 'Charles', 'Karen', 'Christopher', 'Nancy', 'Daniel', 'Lisa',
+	'Matthew', 'Betty', 'Anthony', 'Margaret', 'Mark', 'Sandra', 'Donald', 'Ashley'
+];
+
+export const STAFF_LAST_NAMES = [
+	'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis',
+	'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez', 'Wilson', 'Anderson', 'Thomas',
+	'Taylor', 'Moore', 'Jackson', 'Martin', 'Lee', 'Thompson', 'White', 'Harris',
+	'Clark', 'Lewis', 'Robinson', 'Walker', 'Young', 'Allen', 'King', 'Wright'
+];
 
 // Initial area definitions
 export const INITIAL_AREAS: Area[] = [

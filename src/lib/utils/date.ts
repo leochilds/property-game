@@ -68,3 +68,13 @@ export function calculateDaysRemaining(currentDate: GameDate, endDate: GameDate)
 	const endDays = endDate.year * 365 + endDate.month * 30 + endDate.day;
 	return Math.max(0, endDays - currentDays);
 }
+
+export function isNewQuarter(previousDate: GameDate, currentDate: GameDate): boolean {
+	// Quarters start in months 1, 4, 7, 10
+	const getQuarter = (month: number) => Math.floor((month - 1) / 3);
+	const prevQuarter = getQuarter(previousDate.month);
+	const currQuarter = getQuarter(currentDate.month);
+	
+	// Check if we've moved to a new quarter
+	return currQuarter !== prevQuarter || currentDate.year !== previousDate.year;
+}

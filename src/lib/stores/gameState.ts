@@ -1,13 +1,26 @@
 import { writable } from 'svelte/store';
-import type { GameState, Property, TimeSpeed, GameDate, RentMarkup, TenancyPeriod, Tenancy, MarketProperty, PropertyFeatures, PropertyType, Bedrooms, GardenType, ParkingType, AreaName, Area, AreaRating, District } from '../types/game';
-import { BASE_RATE, BASE_FILL_CHANCE, BASE_SALE_CHANCE, MAX_MARKET_PROPERTIES, PROPERTY_BASE_VALUE, PROPERTY_TYPE_MULTIPLIERS, BEDROOM_MULTIPLIERS, GARDEN_MULTIPLIERS, PARKING_MULTIPLIERS, CRIME_MULTIPLIERS, SCHOOLS_MULTIPLIERS, TRANSPORT_MULTIPLIERS, ECONOMY_MULTIPLIERS, INITIAL_AREAS } from '../types/game';
-import { createDate, addDays, addMonths, isAfterOrEqual } from '../utils/date';
+import type { GameState, Property, TimeSpeed, GameDate, RentMarkup, TenancyPeriod, Tenancy, MarketProperty, PropertyFeatures, PropertyType, Bedrooms, GardenType, ParkingType, AreaName, Area, AreaRating, District, EconomicPhase, Economy, StaffType, EstateAgent, Caretaker, Staff, ExperienceLevel } from '../types/game';
+import { INITIAL_BASE_RATE, MIN_BASE_RATE, TARGET_QUARTERLY_INFLATION, BASE_FILL_CHANCE, BASE_SALE_CHANCE, MAX_MARKET_PROPERTIES, PROPERTY_BASE_VALUE, PROPERTY_TYPE_MULTIPLIERS, BEDROOM_MULTIPLIERS, GARDEN_MULTIPLIERS, PARKING_MULTIPLIERS, CRIME_MULTIPLIERS, SCHOOLS_MULTIPLIERS, TRANSPORT_MULTIPLIERS, ECONOMY_MULTIPLIERS, INITIAL_AREAS, DISTRICT_BASE_SALARIES, EXPERIENCE_THRESHOLDS, PROPERTIES_PER_LEVEL, PROMOTION_BONUS_MULTIPLIER, PROMOTION_WAGE_INCREASE, XP_PER_PROPERTY_PER_DAY, MAX_UNPAID_MONTHS, STAFF_FIRST_NAMES, STAFF_LAST_NAMES } from '../types/game';
+import { createDate, addDays, addMonths, isAfterOrEqual, isNewQuarter, calculateDaysRemaining } from '../utils/date';
 
 const STORAGE_KEY = 'property-game-state';
-const GAME_VERSION = 8;
+const GAME_VERSION = 11;
+
+// Calculate daily interest rate: (1 + (baseRate - 1%)) ^ (1/365) - 1
+// For 5% base rate: (1 + 0.04) ^ (1/365) - 1 ≈ 0.00010738
+function calculateDailyInterestRate(baseRate: number): number {
+	const annualRate = (baseRate - 1) / 100; // Base rate minus 1%
+	return Math.pow(1 + annualRate, 1 / 365) - 1;
+}
 
 function randomChoice<T>(array: T[]): T {
 	return array[Math.floor(Math.random() * array.length)];
+}
+
+function generateStaffName(): string {
+	const firstName = randomChoice(STAFF_FIRST_NAMES);
+	const lastName = randomChoice(STAFF_LAST_NAMES);
+	return `${firstName} ${lastName}`;
 }
 
 function generateDistrictInfo(): { district: District; modifier: number } {
@@ -80,11 +93,13 @@ function createStarterHome(areas: Area[]): Property {
 	const area: AreaName = 'Suburbs';
 	const areaRatings = getAreaRatings(area, areas);
 	const { district, modifier: districtModifier } = generateDistrictInfo();
+	const baseValue = calculateBaseValueFromFeatures(features, areaRatings, districtModifier);
 	
 	return {
 		id: 'starter-home',
 		name: generatePropertyName(features),
-		baseValue: calculateBaseValueFromFeatures(features, areaRatings, districtModifier),
+		baseValue,
+		purchaseBaseValue: baseValue, // Track original value
 		features,
 		area,
 		district,
@@ -93,14 +108,15 @@ function createStarterHome(areas: Area[]): Property {
 		tenancy: null,
 		vacantSettings: {
 			rentMarkup: 5,
-			periodMonths: 12,
-			autoRelist: false
+			periodMonths: 12
 		},
 		maintenance: 100,
 		isUnderMaintenance: false,
-		scheduleMaintenance: false,
 		maintenanceStartDate: null,
-		saleInfo: null
+		saleInfo: null,
+		assignedEstateAgent: null,
+		assignedCaretaker: null,
+		listedDate: null
 	};
 }
 
@@ -137,13 +153,27 @@ function createInitialState(): GameState {
 	return {
 		player: {
 			cash: 0,
+			accruedInterest: 0,
 			properties: [createStarterHome(areas)]
 		},
 		propertyMarket: generateInitialMarket(areas),
 		areas,
+		economy: {
+			baseRate: INITIAL_BASE_RATE,
+			inflationRate: 0.5, // Start at target
+			economicPhase: 'expansion',
+			quarterlyInflationHistory: [0.5, 0.5, 0.5, 0.5], // Initialize with target
+			lastQuarterDate: startDate,
+			quartersSincePhaseChange: 0
+		},
+		staff: {
+			estateAgents: [],
+			caretakers: []
+		},
 		gameTime: {
 			currentDate: startDate,
 			lastRentCollectionDate: createDate(1, 1, 0), // Start before day 1 so first rent can be collected
+			lastInterestCalculationDate: createDate(1, 1, 0), // Start before day 1
 			speed: 1,
 			isPaused: false
 		},
@@ -289,6 +319,74 @@ function loadStateFromStorage(): GameState {
 					return marketProp;
 				});
 				
+				// Version 9: Add interest tracking
+				if (!(parsed.player as any).accruedInterest) {
+					(parsed.player as any).accruedInterest = 0;
+				}
+				if (!(parsed.gameTime as any).lastInterestCalculationDate) {
+					(parsed.gameTime as any).lastInterestCalculationDate = parsed.gameTime.currentDate;
+				}
+				
+				// Version 10: Add economy system and baseRateAtStart to tenancies
+				if (!(parsed as any).economy) {
+					(parsed as any).economy = {
+						baseRate: INITIAL_BASE_RATE,
+						inflationRate: 0.5,
+						economicPhase: 'expansion',
+						quarterlyInflationHistory: [0.5, 0.5, 0.5, 0.5],
+						lastQuarterDate: parsed.gameTime.currentDate,
+						quartersSincePhaseChange: 0
+					};
+				}
+				
+				// Add baseRateAtStart to existing tenancies
+				parsed.player.properties = parsed.player.properties.map((property) => {
+					let updatedProperty = property;
+					
+					if (property.tenancy && !(property.tenancy as any).baseRateAtStart) {
+						updatedProperty = {
+							...updatedProperty,
+							tenancy: {
+								...updatedProperty.tenancy!,
+								baseRateAtStart: INITIAL_BASE_RATE
+							}
+						};
+					}
+					
+					// Version 10: Add purchaseBaseValue for value change tracking
+					if (!(updatedProperty as any).purchaseBaseValue) {
+						updatedProperty = {
+							...updatedProperty,
+							purchaseBaseValue: updatedProperty.baseValue
+						};
+					}
+					
+					return updatedProperty;
+				});
+				
+				// Version 11: Add staff system and remove old autoRelist/scheduleMaintenance
+				if (!(parsed as any).staff) {
+					(parsed as any).staff = {
+						estateAgents: [],
+						caretakers: []
+					};
+				}
+				
+				// Remove autoRelist and scheduleMaintenance, add new staff fields
+				parsed.player.properties = parsed.player.properties.map((property: any) => {
+					const { autoRelist, scheduleMaintenance, ...rest } = property.vacantSettings || {};
+					return {
+						...property,
+						vacantSettings: {
+							rentMarkup: property.vacantSettings?.rentMarkup || 5,
+							periodMonths: property.vacantSettings?.periodMonths || 12
+						},
+						assignedEstateAgent: property.assignedEstateAgent ?? null,
+						assignedCaretaker: property.assignedCaretaker ?? null,
+						listedDate: property.listedDate ?? null
+					};
+				});
+				
 				parsed.version = GAME_VERSION;
 				saveStateToStorage(parsed);
 				return parsed;
@@ -313,7 +411,7 @@ function saveStateToStorage(state: GameState): void {
 
 function calculateMonthlyRent(property: Property): number {
 	if (!property.tenancy) return 0;
-	const annualRate = BASE_RATE + property.tenancy.rentMarkup;
+	const annualRate = property.tenancy.baseRateAtStart + property.tenancy.rentMarkup;
 	const annualRent = (property.tenancy.marketValueAtStart * annualRate) / 100;
 	return annualRent / 12;
 }
@@ -342,7 +440,7 @@ function canBeLetOut(property: Property): boolean {
 	return property.maintenance >= 25 && !property.isUnderMaintenance;
 }
 
-function tryFillProperty(property: Property, currentDate: GameDate, areas: Area[]): Property {
+function tryFillProperty(property: Property, currentDate: GameDate, areas: Area[], baseRate: number): Property {
 	if (property.tenancy) return property; // Already occupied
 	if (!canBeLetOut(property)) return property; // Cannot be let out
 
@@ -361,7 +459,8 @@ function tryFillProperty(property: Property, currentDate: GameDate, areas: Area[
 			periodMonths: property.vacantSettings.periodMonths,
 			startDate: currentDate,
 			endDate: endDate,
-			marketValueAtStart: marketValue
+			marketValueAtStart: marketValue,
+			baseRateAtStart: baseRate
 		};
 		return { ...property, tenancy };
 	}
@@ -392,6 +491,118 @@ function updateAreaRatings(areas: Area[]): Area[] {
 	});
 }
 
+// Economic cycle functions
+function generateQuarterlyInflation(phase: EconomicPhase): number {
+	// Base inflation ranges by economic phase
+	const ranges: Record<EconomicPhase, { min: number; max: number }> = {
+		recession: { min: -0.5, max: 0.3 },    // Deflation possible, low inflation
+		recovery: { min: 0.2, max: 0.7 },      // Rising inflation
+		expansion: { min: 0.4, max: 1.0 },     // Higher inflation
+		peak: { min: 0.6, max: 1.3 }           // Risk of high inflation
+	};
+	
+	const range = ranges[phase];
+	return range.min + Math.random() * (range.max - range.min);
+}
+
+function adjustBaseRate(currentRate: number, inflationRate: number): number {
+	// Calculate how far from target (0.5% quarterly = 2% annually)
+	const inflationGap = inflationRate - TARGET_QUARTERLY_INFLATION;
+	
+	// Sensitivity: how much to adjust rate for each percentage point of inflation gap
+	const sensitivity = 2.0;
+	
+	// Calculate adjustment
+	const adjustment = inflationGap * sensitivity;
+	
+	// Apply adjustment and enforce minimum
+	const newRate = currentRate + adjustment;
+	return Math.max(MIN_BASE_RATE, newRate);
+}
+
+function progressEconomicCycle(economy: Economy): EconomicPhase {
+	const { economicPhase, quartersSincePhaseChange } = economy;
+	
+	// Minimum quarters in a phase before considering transition
+	const minQuarters = 3;
+	
+	// Phase transition probabilities (increase with time in phase)
+	const transitionChance = Math.min(0.3, 0.05 * quartersSincePhaseChange);
+	
+	if (quartersSincePhaseChange < minQuarters) {
+		return economicPhase; // Stay in current phase
+	}
+	
+	if (Math.random() > transitionChance) {
+		return economicPhase; // No transition yet
+	}
+	
+	// Determine next phase in cycle
+	const cycle: EconomicPhase[] = ['recession', 'recovery', 'expansion', 'peak'];
+	const currentIndex = cycle.indexOf(economicPhase);
+	const nextIndex = (currentIndex + 1) % cycle.length;
+	
+	return cycle[nextIndex];
+}
+
+function applyInflationToProperties(properties: Property[], inflationRate: number): Property[] {
+	if (inflationRate === 0) return properties;
+	
+	const multiplier = 1 + (inflationRate / 100);
+	
+	return properties.map(property => ({
+		...property,
+		baseValue: Math.round(property.baseValue * multiplier)
+	}));
+}
+
+function applyInflationToMarket(marketProperties: MarketProperty[], inflationRate: number): MarketProperty[] {
+	if (inflationRate === 0) return marketProperties;
+	
+	const multiplier = 1 + (inflationRate / 100);
+	
+	return marketProperties.map(property => ({
+		...property,
+		baseValue: Math.round(property.baseValue * multiplier)
+	}));
+}
+
+function updateEconomyQuarterly(economy: Economy, properties: Property[], marketProperties: MarketProperty[]): {
+	economy: Economy;
+	properties: Property[];
+	marketProperties: MarketProperty[];
+} {
+	// Generate new inflation for this quarter
+	const newInflationRate = generateQuarterlyInflation(economy.economicPhase);
+	
+	// Update inflation history (keep last 4 quarters)
+	const newHistory = [...economy.quarterlyInflationHistory.slice(-3), newInflationRate];
+	
+	// Adjust base rate based on inflation
+	const newBaseRate = adjustBaseRate(economy.baseRate, newInflationRate);
+	
+	// Check for phase transition
+	const newPhase = progressEconomicCycle(economy);
+	const phaseChanged = newPhase !== economy.economicPhase;
+	
+	// Apply inflation to all property base values
+	const updatedProperties = applyInflationToProperties(properties, newInflationRate);
+	const updatedMarket = applyInflationToMarket(marketProperties, newInflationRate);
+	
+	return {
+		economy: {
+			...economy,
+			baseRate: newBaseRate,
+			inflationRate: newInflationRate,
+			economicPhase: newPhase,
+			quarterlyInflationHistory: newHistory,
+			quartersSincePhaseChange: phaseChanged ? 0 : economy.quartersSincePhaseChange + 1
+		},
+		properties: updatedProperties,
+		marketProperties: updatedMarket
+	};
+}
+
 function createGameStore() {
 	const { subscribe, set, update } = writable<GameState>(loadStateFromStorage());
 
@@ -401,8 +612,139 @@ function createGameStore() {
 			update((state) => {
 				const newDate = addDays(state.gameTime.currentDate, 1);
 
-				// Check if it's the 1st of the month for rent collection, maintenance, and area updates
+				// Check for quarterly economic update
+				if (isNewQuarter(state.economy.lastQuarterDate, newDate)) {
+					const result = updateEconomyQuarterly(state.economy, state.player.properties, state.propertyMarket);
+					state.economy = { ...result.economy, lastQuarterDate: newDate };
+					state.player.properties = result.properties;
+					state.propertyMarket = result.marketProperties;
+				}
+
+				// Calculate daily interest on cash
+				const dailyRate = calculateDailyInterestRate(state.economy.baseRate);
+				const dailyInterest = state.player.cash * dailyRate;
+				state.player.accruedInterest += dailyInterest;
+				state.gameTime.lastInterestCalculationDate = newDate;
+
+				// Staff experience gain (daily)
+				state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
+					...agent,
+					experiencePoints: agent.experiencePoints + (agent.assignedProperties.length * XP_PER_PROPERTY_PER_DAY)
+				}));
+				
+				state.staff.caretakers = state.staff.caretakers.map(caretaker => ({
+					...caretaker,
+					experiencePoints: caretaker.experiencePoints + (caretaker.assignedProperties.length * XP_PER_PROPERTY_PER_DAY)
+				}));
+
+				// Estate agent auto-listing
+				state.player.properties = state.player.properties.map((property) => {
+					if (property.assignedEstateAgent && !property.tenancy && !property.isUnderMaintenance && property.maintenance >= 25) {
+						if (!property.listedDate) {
+							return {
+								...property,
+								listedDate: newDate
+							};
+						}
+					}
+					return property;
+				});
+
+				// Estate agent weekly adjustments
+				state.player.properties = state.player.properties.map((property) => {
+					if (property.assignedEstateAgent && property.listedDate && !property.tenancy) {
+						const daysSinceListed = calculateDaysRemaining(property.listedDate, newDate);
+						
+						if (daysSinceListed >= 7) {
+							// Randomly adjust rent and/or period
+							const adjustment = Math.random();
+							let updatedProperty = { ...property };
+							
+							if (adjustment < 0.4) {
+								// Reduce rent markup (min 1)
+								updatedProperty.vacantSettings = {
+									...updatedProperty.vacantSettings,
+									rentMarkup: Math.max(1, updatedProperty.vacantSettings.rentMarkup - 1) as RentMarkup
+								};
+							} else if (adjustment < 0.8) {
+								// Shorten period
+								const currentPeriod = updatedProperty.vacantSettings.periodMonths;
+								let newPeriod: TenancyPeriod = currentPeriod;
+								
+								if (currentPeriod === 36) newPeriod = 24;
+								else if (currentPeriod === 24) newPeriod = 18;
+								else if (currentPeriod === 18) newPeriod = 12;
+								else if (currentPeriod === 12) newPeriod = 6;
+								// 6 is minimum, don't change
+								
+								updatedProperty.vacantSettings = {
+									...updatedProperty.vacantSettings,
+									periodMonths: newPeriod
+								};
+							} else {
+								// Do both
+								updatedProperty.vacantSettings = {
+									rentMarkup: Math.max(1, updatedProperty.vacantSettings.rentMarkup - 1) as RentMarkup,
+									periodMonths: (() => {
+										const currentPeriod = updatedProperty.vacantSettings.periodMonths;
+										if (currentPeriod === 36) return 24;
+										if (currentPeriod === 24) return 18;
+										if (currentPeriod === 18) return 12;
+										if (currentPeriod === 12) return 6;
+										return 6;
+									})()
+								};
+							}
+							
+							// Reset listedDate for next week's check
+							updatedProperty.listedDate = newDate;
+							return updatedProperty;
+						}
+					}
+					return property;
+				});
+
+				// Try to fill properties with estate agents
+				state.player.properties = state.player.properties.map((property) => {
+					if (property.assignedEstateAgent && property.listedDate && !property.tenancy) {
+						return tryFillProperty(property, newDate, state.areas, state.economy.baseRate);
+					}
+					return property;
+				});
+
+				// Try to fill properties WITHOUT estate agents (manual tenant finding)
+				state.player.properties = state.player.properties.map((property) => {
+					// Skip if already has estate agent (handled above)
+					// Skip if already has tenant
+					// Skip if can't be let out (maintenance < 25 or under maintenance)
+					if (!property.assignedEstateAgent && !property.tenancy && canBeLetOut(property)) {
+						return tryFillProperty(property, newDate, state.areas, state.economy.baseRate);
+					}
+					return property;
+				});
+
+				// Caretaker auto-maintenance
+				state.player.properties = state.player.properties.map((property) => {
+					if (property.assignedCaretaker && !property.tenancy && !property.isUnderMaintenance && property.maintenance <= 90) {
+						const cost = calculateMaintenanceCost(property);
+						
+						if (state.player.cash >= cost) {
+							state.player.cash -= cost;
+							return {
+								...property,
+								isUnderMaintenance: true,
+								maintenanceStartDate: newDate
+							};
+						}
+					}
+					return property;
+				});
+
+				// Check if it's the 1st of the month for rent collection, maintenance, interest payout, and area updates
 				if (newDate.day === 1) {
+					// Pay out accrued interest
+					state.player.cash += state.player.accruedInterest;
+					state.player.accruedInterest = 0;
 					// Update area ratings monthly
 					state.areas = updateAreaRatings(state.areas);
 					
@@ -420,61 +762,136 @@ function createGameStore() {
 							updatedProperty.maintenance = Math.max(0, property.maintenance - 1);
 						}
 
-						// Degrade maintenance for vacant properties (not under maintenance)
-						if (!property.tenancy && !property.isUnderMaintenance) {
-							updatedProperty.maintenance = Math.max(0, property.maintenance - 0.2);
-						}
+					// Degrade maintenance for vacant properties (not under maintenance)
+					if (!property.tenancy && !property.isUnderMaintenance) {
+						updatedProperty.maintenance = Math.max(0, property.maintenance - 0.2);
+					}
 
-						// Check if maintenance is complete (1 month has passed)
-						if (property.isUnderMaintenance && property.maintenanceStartDate) {
-							const maintenanceEndDate = addMonths(property.maintenanceStartDate, 1);
-							if (isAfterOrEqual(newDate, maintenanceEndDate)) {
-								updatedProperty.maintenance = 100;
-								updatedProperty.isUnderMaintenance = false;
-								updatedProperty.maintenanceStartDate = null;
-
-								// If auto-relist is on, try to fill the property
-								if (property.vacantSettings.autoRelist) {
-									updatedProperty = tryFillProperty(updatedProperty, newDate, state.areas);
-								}
-							}
-						}
-
-						return updatedProperty;
+					return updatedProperty;
 					});
 
 					state.player.cash += totalRent;
 					state.gameTime.lastRentCollectionDate = newDate;
+
+					// Calculate total monthly wages
+					let totalWages = 0;
+					[...state.staff.estateAgents, ...state.staff.caretakers].forEach(staff => {
+						totalWages += staff.currentSalary + staff.unpaidWages;
+					});
+
+					// Pay wages or track unpaid
+					const staffToFire: Array<{ id: string; type: StaffType }> = [];
+					
+					if (state.player.cash >= totalWages) {
+						// Can afford to pay everyone
+						state.player.cash -= totalWages;
+						
+						state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
+							...agent,
+							unpaidWages: 0,
+							monthsUnpaid: 0
+						}));
+						
+						state.staff.caretakers = state.staff.caretakers.map(caretaker => ({
+							...caretaker,
+							unpaidWages: 0,
+							monthsUnpaid: 0
+						}));
+					} else {
+						// Cannot afford wages - track unpaid and check for quitting
+						state.staff.estateAgents = state.staff.estateAgents.map(agent => {
+							const newMonthsUnpaid = agent.monthsUnpaid + 1;
+							if (newMonthsUnpaid >= MAX_UNPAID_MONTHS) {
+								staffToFire.push({ id: agent.id, type: 'estate-agent' });
+								return agent;
+							}
+							return {
+								...agent,
+								unpaidWages: agent.unpaidWages + agent.currentSalary,
+								monthsUnpaid: newMonthsUnpaid
+							};
+						});
+						
+						state.staff.caretakers = state.staff.caretakers.map(caretaker => {
+							const newMonthsUnpaid = caretaker.monthsUnpaid + 1;
+							if (newMonthsUnpaid >= MAX_UNPAID_MONTHS) {
+								staffToFire.push({ id: caretaker.id, type: 'caretaker' });
+								return caretaker;
+							}
+							return {
+								...caretaker,
+								unpaidWages: caretaker.unpaidWages + caretaker.currentSalary,
+								monthsUnpaid: newMonthsUnpaid
+							};
+						});
+					}
+
+					// Fire staff who have quit due to unpaid wages
+					staffToFire.forEach(({ id, type }) => {
+						// Unassign properties
+						state.player.properties = state.player.properties.map((property) => {
+							if (type === 'estate-agent' && property.assignedEstateAgent === id) {
+								return {
+									...property,
+									assignedEstateAgent: null,
+									listedDate: null
+								};
+							} else if (type === 'caretaker' && property.assignedCaretaker === id) {
+								return {
+									...property,
+									assignedCaretaker: null
+								};
+							}
+							return property;
+						});
+
+						// Remove from staff arrays
+						if (type === 'estate-agent') {
+							state.staff.estateAgents = state.staff.estateAgents.filter(s => s.id !== id);
+						} else {
+							state.staff.caretakers = state.staff.caretakers.filter(s => s.id !== id);
+						}
+					});
+
+					// Apply inflation to staff wages (only if positive inflation)
+					if (state.economy.inflationRate > 0) {
+						const inflationMultiplier = 1 + (state.economy.inflationRate / 100);
+						
+						state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
+							...agent,
+							currentSalary: agent.currentSalary * inflationMultiplier,
+							highestInflationRate: Math.max(agent.highestInflationRate, state.economy.inflationRate)
+						}));
+						
+						state.staff.caretakers = state.staff.caretakers.map(caretaker => ({
+							...caretaker,
+							currentSalary: caretaker.currentSalary * inflationMultiplier,
+							highestInflationRate: Math.max(caretaker.highestInflationRate, state.economy.inflationRate)
+						}));
+					}
 				}
 
-				// Check for tenancy expiration and scheduled maintenance
+				// Check if maintenance is complete (1 month has passed) - runs every day
 				state.player.properties = state.player.properties.map((property) => {
-					if (property.tenancy && isAfterOrEqual(newDate, property.tenancy.endDate)) {
-						// Tenancy has expired
-						let updatedProperty = { ...property, tenancy: null };
-
-						// Check if maintenance is scheduled
-						if (property.scheduleMaintenance) {
-							updatedProperty.isUnderMaintenance = true;
-							updatedProperty.maintenanceStartDate = newDate;
-							updatedProperty.scheduleMaintenance = false;
-							return updatedProperty;
+					if (property.isUnderMaintenance && property.maintenanceStartDate) {
+						const maintenanceEndDate = addMonths(property.maintenanceStartDate, 1);
+						if (isAfterOrEqual(newDate, maintenanceEndDate)) {
+							return {
+								...property,
+								maintenance: 100,
+								isUnderMaintenance: false,
+								maintenanceStartDate: null
+							};
 						}
-
-						// Otherwise, try auto-relist if enabled
-						if (property.vacantSettings.autoRelist) {
-							return tryFillProperty(updatedProperty, newDate, state.areas);
-						}
-
-						return updatedProperty;
 					}
 					return property;
 				});
 
-				// Try to fill vacant properties
+				// Check for tenancy expiration
 				state.player.properties = state.player.properties.map((property) => {
-					if (!property.tenancy && property.vacantSettings.autoRelist) {
-						return tryFillProperty(property, newDate, state.areas);
+					if (property.tenancy && isAfterOrEqual(newDate, property.tenancy.endDate)) {
+						// Tenancy has expired
+						return { ...property, tenancy: null };
 					}
 					return property;
 				});
@@ -486,7 +903,8 @@ function createGameStore() {
 						const marketValue = calculateMarketValue(property);
 						const askingPrice = marketValue * (property.saleInfo.askingPricePercentage / 100);
 						const priceRatio = property.saleInfo.askingPricePercentage / 100;
-						const dailySaleChance = BASE_SALE_CHANCE * (1 / Math.pow(priceRatio, 2));
+						const tenantBonus = property.tenancy ? 1.1 : 1.0; // 10% bonus if occupied
+						const dailySaleChance = BASE_SALE_CHANCE * (1 / Math.pow(priceRatio, 2)) * tenantBonus;
 						
 						const roll = Math.random() * 100;
 						if (roll < dailySaleChance) {
@@ -544,15 +962,14 @@ function createGameStore() {
 		setPropertyVacantSettings: (
 			propertyId: string,
 			rentMarkup: RentMarkup,
-			periodMonths: TenancyPeriod,
-			autoRelist: boolean
+			periodMonths: TenancyPeriod
 		) => {
 			update((state) => {
 				state.player.properties = state.player.properties.map((property) => {
 					if (property.id === propertyId) {
 						return {
 							...property,
-							vacantSettings: { rentMarkup, periodMonths, autoRelist }
+							vacantSettings: { rentMarkup, periodMonths }
 						};
 					}
 					return property;
@@ -561,7 +978,7 @@ function createGameStore() {
 				return state;
 			});
 		},
-		performMaintenance: (propertyId: string) => {
+		carryOutMaintenance: (propertyId: string) => {
 			update((state) => {
 				const property = state.player.properties.find((p) => p.id === propertyId);
 				if (!property || property.tenancy || property.isUnderMaintenance) {
@@ -589,21 +1006,6 @@ function createGameStore() {
 				return state;
 			});
 		},
-		toggleScheduleMaintenance: (propertyId: string) => {
-			update((state) => {
-				state.player.properties = state.player.properties.map((property) => {
-					if (property.id === propertyId) {
-						return {
-							...property,
-							scheduleMaintenance: !property.scheduleMaintenance
-						};
-					}
-					return property;
-				});
-				saveStateToStorage(state);
-				return state;
-			});
-		},
 		reset: () => {
 			const newState = createInitialState();
 			set(newState);
@@ -624,6 +1026,7 @@ function createGameStore() {
 					id: `property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
 					name: generatePropertyName(marketProperty.features),
 					baseValue: marketProperty.baseValue,
+					purchaseBaseValue: marketProperty.baseValue, // Track purchase value
 					features: marketProperty.features,
 					area: marketProperty.area,
 					district: marketProperty.district,
@@ -632,14 +1035,15 @@ function createGameStore() {
 					tenancy: null,
 					vacantSettings: {
 						rentMarkup: 5,
-						periodMonths: 12,
-						autoRelist: false
+						periodMonths: 12
 					},
 					maintenance: marketProperty.maintenance,
 					isUnderMaintenance: false,
-					scheduleMaintenance: false,
 					maintenanceStartDate: null,
-					saleInfo: null
+					saleInfo: null,
+					assignedEstateAgent: null,
+					assignedCaretaker: null,
+					listedDate: null
 				};
 
 				state.player.cash -= marketValue;
@@ -672,6 +1076,7 @@ function createGameStore() {
 						id: `property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
 						name: generatePropertyName(marketProperty.features),
 						baseValue: marketProperty.baseValue,
+						purchaseBaseValue: marketProperty.baseValue, // Track purchase value
 						features: marketProperty.features,
 						area: marketProperty.area,
 						district: marketProperty.district,
@@ -680,14 +1085,15 @@ function createGameStore() {
 						tenancy: null,
 						vacantSettings: {
 							rentMarkup: 5,
-							periodMonths: 12,
-							autoRelist: false
+							periodMonths: 12
 						},
 						maintenance: marketProperty.maintenance,
 						isUnderMaintenance: false,
-						scheduleMaintenance: false,
 						maintenanceStartDate: null,
-						saleInfo: null
+						saleInfo: null,
+						assignedEstateAgent: null,
+						assignedCaretaker: null,
+						listedDate: null
 					};
 
 					state.player.cash -= offerAmount;
@@ -704,7 +1110,7 @@ function createGameStore() {
 		listPropertyForSale: (propertyId: string, askingPricePercentage: number) => {
 			update((state) => {
 				const property = state.player.properties.find((p) => p.id === propertyId);
-				if (!property || property.tenancy || property.isUnderMaintenance || property.saleInfo) {
+				if (!property || property.isUnderMaintenance || property.saleInfo) {
 					return state; // Cannot list
 				}
 
@@ -733,6 +1139,262 @@ function createGameStore() {
 						return {
 							...p,
 							saleInfo: null
+						};
+					}
+					return p;
+				});
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		hireStaff: (type: StaffType, district: District) => {
+			update((state) => {
+				const id = `staff-${type}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+				const name = generateStaffName();
+				const baseSalary = DISTRICT_BASE_SALARIES[district];
+				
+				const baseStaff = {
+					id,
+					name,
+					type,
+					district,
+					baseSalary,
+					currentSalary: baseSalary,
+					highestInflationRate: state.economy.inflationRate,
+					experienceLevel: 1 as ExperienceLevel,
+					experiencePoints: 0,
+					hiredDate: state.gameTime.currentDate,
+					assignedProperties: [],
+					unpaidWages: 0,
+					monthsUnpaid: 0
+				};
+
+				if (type === 'estate-agent') {
+					const agent: EstateAgent = {
+						...baseStaff,
+						type: 'estate-agent',
+						lastAdjustmentCheck: state.gameTime.currentDate
+					};
+					state.staff.estateAgents.push(agent);
+				} else {
+					const caretaker: Caretaker = {
+						...baseStaff,
+						type: 'caretaker'
+					};
+					state.staff.caretakers.push(caretaker);
+				}
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		fireStaff: (staffId: string, type: StaffType) => {
+			update((state) => {
+				// Find and unassign all properties
+				state.player.properties = state.player.properties.map((property) => {
+					if (type === 'estate-agent' && property.assignedEstateAgent === staffId) {
+						return {
+							...property,
+							assignedEstateAgent: null,
+							listedDate: null
+						};
+					} else if (type === 'caretaker' && property.assignedCaretaker === staffId) {
+						return {
+							...property,
+							assignedCaretaker: null
+						};
+					}
+					return property;
+				});
+
+				// Remove staff
+				if (type === 'estate-agent') {
+					state.staff.estateAgents = state.staff.estateAgents.filter(s => s.id !== staffId);
+				} else {
+					state.staff.caretakers = state.staff.caretakers.filter(s => s.id !== staffId);
+				}
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		promoteStaff: (staffId: string, type: StaffType) => {
+			update((state) => {
+				const staffArray = type === 'estate-agent' ? state.staff.estateAgents : state.staff.caretakers;
+				const staff = staffArray.find(s => s.id === staffId);
+				
+				if (!staff) return state;
+
+				// Check if eligible for promotion
+				const currentLevel = staff.experienceLevel;
+				if (currentLevel >= 5) return state; // Max level
+				
+				const nextLevel = (currentLevel + 1) as ExperienceLevel;
+				const requiredXP = EXPERIENCE_THRESHOLDS[nextLevel];
+				if (staff.experiencePoints < requiredXP) return state;
+
+				// Check if can afford bonus
+				const bonus = staff.currentSalary * PROMOTION_BONUS_MULTIPLIER;
+				if (state.player.cash < bonus) return state;
+
+				// Apply promotion
+				state.player.cash -= bonus;
+				
+				if (type === 'estate-agent') {
+					state.staff.estateAgents = state.staff.estateAgents.map(s => {
+						if (s.id === staffId) {
+							return {
+								...s,
+								experienceLevel: nextLevel,
+								currentSalary: s.currentSalary * (1 + PROMOTION_WAGE_INCREASE)
+							};
+						}
+						return s;
+					});
+				} else {
+					state.staff.caretakers = state.staff.caretakers.map(s => {
+						if (s.id === staffId) {
+							return {
+								...s,
+								experienceLevel: nextLevel,
+								currentSalary: s.currentSalary * (1 + PROMOTION_WAGE_INCREASE)
+							};
+						}
+						return s;
+					});
+				}
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		assignPropertyToStaff: (propertyId: string, staffId: string, type: StaffType) => {
+			update((state) => {
+				const staffArray = type === 'estate-agent' ? state.staff.estateAgents : state.staff.caretakers;
+				const staff = staffArray.find(s => s.id === staffId);
+				const property = state.player.properties.find(p => p.id === propertyId);
+				
+				if (!staff || !property) return state;
+
+				// Validate district match
+				if (property.district !== staff.district) return state;
+
+				// Validate capacity
+				const capacity = PROPERTIES_PER_LEVEL[staff.experienceLevel];
+				if (staff.assignedProperties.length >= capacity) return state;
+
+				// Validate not already assigned
+				if (type === 'estate-agent' && property.assignedEstateAgent) return state;
+				if (type === 'caretaker' && property.assignedCaretaker) return state;
+
+				// Assign property
+				if (type === 'estate-agent') {
+					state.staff.estateAgents = state.staff.estateAgents.map(s => {
+						if (s.id === staffId) {
+							return {
+								...s,
+								assignedProperties: [...s.assignedProperties, propertyId]
+							};
+						}
+						return s;
+					});
+					
+					state.player.properties = state.player.properties.map(p => {
+						if (p.id === propertyId) {
+							// If vacant and can be let, set listedDate
+							const updatedProperty = {
+								...p,
+								assignedEstateAgent: staffId
+							};
+							
+							if (!p.tenancy && !p.isUnderMaintenance && p.maintenance >= 25) {
+								updatedProperty.listedDate = state.gameTime.currentDate;
+							}
+							
+							return updatedProperty;
+						}
+						return p;
+					});
+				} else {
+					state.staff.caretakers = state.staff.caretakers.map(s => {
+						if (s.id === staffId) {
+							return {
+								...s,
+								assignedProperties: [...s.assignedProperties, propertyId]
+							};
+						}
+						return s;
+					});
+					
+					state.player.properties = state.player.properties.map(p => {
+						if (p.id === propertyId) {
+							return {
+								...p,
+								assignedCaretaker: staffId
+							};
+						}
+						return p;
+					});
+				}
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		unassignProperty: (propertyId: string, type: StaffType) => {
+			update((state) => {
+				// Find and remove from staff
+				if (type === 'estate-agent') {
+					state.staff.estateAgents = state.staff.estateAgents.map(s => ({
+						...s,
+						assignedProperties: s.assignedProperties.filter(id => id !== propertyId)
+					}));
+					
+					state.player.properties = state.player.properties.map(p => {
+						if (p.id === propertyId) {
+							return {
+								...p,
+								assignedEstateAgent: null,
+								listedDate: null
+							};
+						}
+						return p;
+					});
+				} else {
+					state.staff.caretakers = state.staff.caretakers.map(s => ({
+						...s,
+						assignedProperties: s.assignedProperties.filter(id => id !== propertyId)
+					}));
+					
+					state.player.properties = state.player.properties.map(p => {
+						if (p.id === propertyId) {
+							return {
+								...p,
+								assignedCaretaker: null
+							};
+						}
+						return p;
+					});
+				}
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		listPropertyNow: (propertyId: string) => {
+			update((state) => {
+				const property = state.player.properties.find(p => p.id === propertyId);
+				
+				if (!property || property.tenancy || property.isUnderMaintenance || property.maintenance < 25) {
+					return state;
+				}
+
+				state.player.properties = state.player.properties.map(p => {
+					if (p.id === propertyId) {
+						return {
+							...p,
+							listedDate: state.gameTime.currentDate
 						};
 					}
 					return p;

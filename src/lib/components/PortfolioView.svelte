@@ -3,7 +3,7 @@
 	import { gameState } from '$lib/stores/gameState';
 	import { calculateDaysRemaining } from '$lib/utils/date';
 	import { formatCurrency } from '$lib/utils/format';
-	import { BASE_RATE, DISTRICT_NAMES } from '$lib/types/game';
+	import { DISTRICT_NAMES } from '$lib/types/game';
 
 	export let onSelectProperty: (propertyId: string) => void;
 	
@@ -25,11 +25,11 @@
 	function calculateMonthlyRent(property: Property): number {
 		if (!property.tenancy) {
 			const marketValue = calculateMarketValue(property);
-			const annualRate = BASE_RATE + property.vacantSettings.rentMarkup;
+			const annualRate = $gameState.economy.baseRate + property.vacantSettings.rentMarkup;
 			const annualRent = (marketValue * annualRate) / 100;
 			return annualRent / 12;
 		}
-		const annualRate = BASE_RATE + property.tenancy.rentMarkup;
+		const annualRate = property.tenancy.baseRateAtStart + property.tenancy.rentMarkup;
 		const annualRent = (property.tenancy.marketValueAtStart * annualRate) / 100;
 		return annualRent / 12;
 	}
@@ -101,6 +101,8 @@
 			{#each filteredProperties as property}
 				{@const stateInfo = getPropertyStateInfo(property)}
 				{@const marketValue = calculateMarketValue(property)}
+				{@const valueChange = property.baseValue - property.purchaseBaseValue}
+				{@const percentChange = ((valueChange / property.purchaseBaseValue) * 100)}
 				<button
 					onclick={() => onSelectProperty(property.id)}
 					class="bg-slate-700 rounded-lg p-4 border border-slate-600 hover:border-slate-500 transition-all cursor-pointer text-left"
@@ -124,6 +126,11 @@
 							<span class="ml-2 font-semibold {getMaintenanceColor(property.maintenance)}">
 								{formatCurrency(marketValue)}
 							</span>
+							{#if valueChange !== 0}
+								<span class="ml-1 text-xs {valueChange >= 0 ? 'text-green-400' : 'text-red-400'}">
+									({valueChange >= 0 ? '+' : ''}{percentChange.toFixed(1)}%)
+								</span>
+							{/if}
 						</div>
 						
 						<div>
