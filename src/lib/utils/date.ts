@@ -78,3 +78,11 @@ export function isNewQuarter(previousDate: GameDate, currentDate: GameDate): boo
 	// Check if we've moved to a new quarter
 	return currQuarter !== prevQuarter || currentDate.year !== previousDate.year;
 }
+
+export function formatDate(date: GameDate): string {
+	const monthNames = [
+		'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+		'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+	];
+	return `${date.day} ${monthNames[date.month - 1]} ${date.year}`;
+}

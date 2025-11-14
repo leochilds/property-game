@@ -52,6 +52,14 @@
 			return { badge: 'VACANT', color: 'bg-amber-600', icon: '📭' };
 		}
 	}
+
+	function hasMortgage(propertyId: string): boolean {
+		return $gameState.player.mortgages.some(m => m.propertyId === propertyId);
+	}
+
+	function getMortgageInfo(propertyId: string) {
+		return $gameState.player.mortgages.find(m => m.propertyId === propertyId);
+	}
 </script>
 
 <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
@@ -114,6 +122,13 @@
 								<span class="font-semibold text-indigo-400">{DISTRICT_NAMES[property.district]}</span>
 								<span class="ml-2">District {property.district}</span>
 							</div>
+							{#if hasMortgage(property.id)}
+								<div class="mt-1">
+									<span class="inline-block px-2 py-0.5 bg-red-600 text-white rounded text-xs font-semibold">
+										🏦 MORTGAGED
+									</span>
+								</div>
+							{/if}
 						</div>
 						<span class="inline-block px-2 py-1 {stateInfo.color} text-white rounded text-xs font-semibold whitespace-nowrap ml-2">
 							{stateInfo.icon} {stateInfo.badge}
@@ -174,6 +189,26 @@
 							<div class="text-amber-400 text-xs">
 								Seeking tenants...
 							</div>
+						{/if}
+
+						{#if hasMortgage(property.id)}
+							{@const mortgage = getMortgageInfo(property.id)}
+							{#if mortgage}
+								<div class="mt-2 pt-2 border-t border-slate-600">
+									<div>
+										<span class="text-slate-400">Mortgage:</span>
+										<span class="ml-2 font-semibold text-red-400">
+											{formatCurrency(mortgage.outstandingBalance)}
+										</span>
+									</div>
+									<div>
+										<span class="text-slate-400">Rate:</span>
+										<span class="ml-2 font-semibold text-blue-400">
+											{mortgage.interestRate.toFixed(2)}%
+										</span>
+									</div>
+								</div>
+							{/if}
 						{/if}
 					</div>
 					

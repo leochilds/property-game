@@ -2,10 +2,14 @@
 	import type { MarketProperty, PropertyType, GardenType, ParkingType, AreaRating, District } from '$lib/types/game';
 	import { gameState } from '$lib/stores/gameState';
 	import { formatCurrency } from '$lib/utils/format';
+	import { formatDate } from '$lib/utils/date';
 	import { DISTRICT_NAMES } from '$lib/types/game';
+	import MortgageFinanceModal from './MortgageFinanceModal.svelte';
 
 	let selectedOffers: { [key: string]: number} = {};
 	let selectedDistrict: District | 'all' = 'all';
+	let showMortgageModal = false;
+	let selectedPropertyForMortgage: MarketProperty | null = null;
 
 	$: filteredMarket = selectedDistrict === 'all' 
 		? $gameState.propertyMarket 
@@ -20,8 +24,11 @@
 		return marketProperty.baseValue * (marketProperty.maintenance / 100);
 	}
 
-	function calculateOfferAcceptanceChance(offerPercentage: number): number {
-		return Math.pow(offerPercentage / 100, 10) * 100;
+	function calculateOfferAcceptanceChance(offerPercentage: number, daysOnMarket: number): { base: number; timeBonus: number; final: number } {
+		const base = Math.pow(offerPercentage / 100, 10) * 100;
+		const timeBonus = Math.floor(daysOnMarket / 180) * 5;
+		const final = base + timeBonus;
+		return { base, timeBonus, final };
 	}
 
 	function getMaintenanceColor(maintenance: number): string {
@@ -93,6 +100,20 @@
 		gameState.makeOffer(marketPropertyId, offerPercentage);
 		delete selectedOffers[marketPropertyId];
 	}
+
+	function handleOpenMortgageModal(marketProperty: MarketProperty) {
+		selectedPropertyForMortgage = marketProperty;
+		showMortgageModal = true;
+		gameState.togglePause(); // Auto-pause game
+	}
+
+	function handleCloseMortgageModal() {
+		showMortgageModal = false;
+		selectedPropertyForMortgage = null;
+		if ($gameState.gameTime.isPaused) {
+			gameState.togglePause(); // Resume game
+		}
+	}
 </script>
 
 <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
@@ -134,7 +155,7 @@
 				{@const marketValue = calculateMarketPropertyValue(marketProperty)}
 				{@const offerPercentage = selectedOffers[marketProperty.id] || 95}
 				{@const offerAmount = marketValue * (offerPercentage / 100)}
-				{@const acceptanceChance = calculateOfferAcceptanceChance(offerPercentage)}
+				{@const acceptanceChances = calculateOfferAcceptanceChance(offerPercentage, marketProperty.daysOnMarket)}
 				{@const area = $gameState.areas.find(a => a.name === marketProperty.area)}
 				<div class="bg-slate-700 rounded-lg p-4 border border-slate-600">
 					<div class="flex justify-between items-start mb-3">
@@ -186,6 +207,14 @@
 						</div>
 						<div class="border-t border-slate-600 pt-2">
 							<div>
+								<span class="text-slate-400">Listed:</span>
+								<span class="ml-2 font-semibold text-cyan-400">{formatDate(marketProperty.listedDate)}</span>
+							</div>
+							<div>
+								<span class="text-slate-400">Days on Market:</span>
+								<span class="ml-2 font-semibold text-cyan-400">{marketProperty.daysOnMarket}</span>
+							</div>
+							<div>
 								<span class="text-slate-400">Base Value:</span>
 								<span class="ml-2 font-semibold">{formatCurrency(marketProperty.baseValue)}</span>
 							</div>
@@ -215,6 +244,13 @@
 								Buy Now - {formatCurrency(marketValue)}
 							{/if}
 						</button>
+
+						<button
+							onclick={() => handleOpenMortgageModal(marketProperty)}
+							class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition-colors"
+						>
+							💰 Buy with Finance
+						</button>
 						
 						<div class="bg-slate-600 rounded p-3">
 							<div class="text-sm font-semibold mb-2">Make an Offer (50-95%)</div>
@@ -231,7 +267,11 @@
 								<span class="font-semibold text-green-400">{formatCurrency(offerAmount)}</span>
 							</div>
 							<div class="text-xs text-slate-300 mb-2">
-								Acceptance Chance: <span class="font-semibold text-yellow-400">{acceptanceChance.toFixed(2)}%</span>
+								<div>Base Chance: <span class="font-semibold text-yellow-400">{acceptanceChances.base.toFixed(2)}%</span></div>
+								{#if acceptanceChances.timeBonus > 0}
+									<div>Time Bonus: <span class="font-semibold text-green-400">+{acceptanceChances.timeBonus}%</span></div>
+								{/if}
+								<div class="font-bold mt-1">Total: <span class="text-yellow-400">{acceptanceChances.final.toFixed(2)}%</span></div>
 							</div>
 							<button
 								onclick={() => handleMakeOffer(marketProperty.id)}
@@ -248,7 +288,14 @@
 						</div>
 					</div>
 				</div>
-			{/each}
+		{/each}
 		</div>
 	{/if}
 </div>
+
+{#if showMortgageModal && selectedPropertyForMortgage}
+	<MortgageFinanceModal 
+		marketProperty={selectedPropertyForMortgage}
+		onClose={handleCloseMortgageModal}
+	/>
+{/if}

@@ -3,12 +3,14 @@
 	import { gameState } from '$lib/stores/gameState';
 	import { TIME_SPEED_MS, type TimeSpeed } from '$lib/types/game';
 	import MarketView from '$lib/components/MarketView.svelte';
+	import AuctionView from '$lib/components/AuctionView.svelte';
 	import PortfolioView from '$lib/components/PortfolioView.svelte';
 	import PropertyDetail from '$lib/components/PropertyDetail.svelte';
 	import StaffView from '$lib/components/StaffView.svelte';
+	import MortgageView from '$lib/components/MortgageView.svelte';
 	import { formatCurrency } from '$lib/utils/format';
 
-	type View = 'market' | 'portfolio' | 'staff' | 'property-detail';
+	type View = 'market' | 'auction' | 'portfolio' | 'staff' | 'mortgages' | 'property-detail';
 	
 	let currentView: View = 'portfolio';
 	let selectedPropertyId: string | null = null;
@@ -210,6 +212,14 @@
 				Portfolio ({$gameState.player.properties.length})
 			</button>
 			<button
+				onclick={() => switchView('mortgages')}
+				class="flex-1 px-6 py-3 rounded-lg font-semibold transition-colors {currentView === 'mortgages'
+					? 'bg-blue-600 text-white'
+					: 'bg-slate-700 text-slate-300 hover:bg-slate-600'}"
+			>
+				Mortgages ({$gameState.player.mortgages.length})
+			</button>
+			<button
 				onclick={() => switchView('staff')}
 				class="flex-1 px-6 py-3 rounded-lg font-semibold transition-colors {currentView === 'staff'
 					? 'bg-blue-600 text-white'
@@ -225,13 +235,25 @@
 			>
 				Market ({$gameState.propertyMarket.length})
 			</button>
+			<button
+				onclick={() => switchView('auction')}
+				class="flex-1 px-6 py-3 rounded-lg font-semibold transition-colors {currentView === 'auction'
+					? 'bg-amber-600 text-white'
+					: 'bg-slate-700 text-slate-300 hover:bg-slate-600'}"
+			>
+				🔨 Auction ({$gameState.auctionMarket.length}/5)
+			</button>
 		</div>
 
 		<!-- Content Area -->
 		{#if currentView === 'market'}
 			<MarketView />
+		{:else if currentView === 'auction'}
+			<AuctionView />
 		{:else if currentView === 'portfolio'}
 			<PortfolioView onSelectProperty={handleSelectProperty} />
+		{:else if currentView === 'mortgages'}
+			<MortgageView />
 		{:else if currentView === 'staff'}
 			<StaffView />
 		{:else if currentView === 'property-detail'}

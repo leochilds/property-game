@@ -1,10 +1,10 @@
 import { writable } from 'svelte/store';
-import type { GameState, Property, TimeSpeed, GameDate, RentMarkup, TenancyPeriod, Tenancy, MarketProperty, PropertyFeatures, PropertyType, Bedrooms, GardenType, ParkingType, AreaName, Area, AreaRating, District, EconomicPhase, Economy, StaffType, EstateAgent, Caretaker, Staff, ExperienceLevel } from '../types/game';
-import { INITIAL_BASE_RATE, MIN_BASE_RATE, TARGET_QUARTERLY_INFLATION, BASE_FILL_CHANCE, BASE_SALE_CHANCE, MAX_MARKET_PROPERTIES, PROPERTY_BASE_VALUE, PROPERTY_TYPE_MULTIPLIERS, BEDROOM_MULTIPLIERS, GARDEN_MULTIPLIERS, PARKING_MULTIPLIERS, CRIME_MULTIPLIERS, SCHOOLS_MULTIPLIERS, TRANSPORT_MULTIPLIERS, ECONOMY_MULTIPLIERS, INITIAL_AREAS, DISTRICT_BASE_SALARIES, EXPERIENCE_THRESHOLDS, PROPERTIES_PER_LEVEL, PROMOTION_BONUS_MULTIPLIER, PROMOTION_WAGE_INCREASE, XP_PER_PROPERTY_PER_DAY, MAX_UNPAID_MONTHS, STAFF_FIRST_NAMES, STAFF_LAST_NAMES } from '../types/game';
+import type { GameState, Property, TimeSpeed, GameDate, RentMarkup, TenancyPeriod, Tenancy, MarketProperty, AuctionProperty, PropertyFeatures, PropertyType, Bedrooms, GardenType, ParkingType, AreaName, Area, AreaRating, District, EconomicPhase, Economy, StaffType, EstateAgent, Caretaker, Staff, ExperienceLevel, Mortgage, MortgageType, DepositPercentage, TermLength, FixedPeriod } from '../types/game';
+import { INITIAL_BASE_RATE, MIN_BASE_RATE, TARGET_QUARTERLY_INFLATION, BASE_FILL_CHANCE, BASE_SALE_CHANCE, MAX_MARKET_PROPERTIES, MAX_AUCTION_PROPERTIES, PROPERTY_BASE_VALUE, PROPERTY_TYPE_MULTIPLIERS, BEDROOM_MULTIPLIERS, GARDEN_MULTIPLIERS, PARKING_MULTIPLIERS, CRIME_MULTIPLIERS, SCHOOLS_MULTIPLIERS, TRANSPORT_MULTIPLIERS, ECONOMY_MULTIPLIERS, INITIAL_AREAS, DISTRICT_BASE_SALARIES, EXPERIENCE_THRESHOLDS, PROPERTIES_PER_LEVEL, PROMOTION_BONUS_MULTIPLIER, PROMOTION_WAGE_INCREASE, XP_PER_PROPERTY_PER_DAY, MAX_UNPAID_MONTHS, STAFF_FIRST_NAMES, STAFF_LAST_NAMES, DEPOSIT_RATE_PREMIUMS, BTL_RATE_PREMIUM } from '../types/game';
 import { createDate, addDays, addMonths, isAfterOrEqual, isNewQuarter, calculateDaysRemaining } from '../utils/date';
 
 const STORAGE_KEY = 'property-game-state';
-const GAME_VERSION = 12;
+const GAME_VERSION = 14;
 
 // Calculate daily interest rate: (1 + (baseRate - 1%)) ^ (1/365) - 1
 // For 5% base rate: (1 + 0.04) ^ (1/365) - 1 ≈ 0.00010738
@@ -120,9 +120,39 @@ function createStarterHome(areas: Area[]): Property {
 	};
 }
 
-function generateMarketProperty(areas: Area[]): MarketProperty {
+function generateMarketProperty(areas: Area[], currentDate: GameDate): MarketProperty {
 	const id = `market-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-	const maintenance = Math.floor(Math.random() * 100) + 1; // 1-100%
+	const maintenance = Math.floor(Math.random() * 26) + 75; // 75-100%
+	const features = generateRandomFeatures();
+	const areaNames: AreaName[] = areas.map(a => a.name);
+	const area = randomChoice(areaNames);
+	const areaRatings = getAreaRatings(area, areas);
+	const { district, modifier: districtModifier } = generateDistrictInfo();
+	const baseValue = calculateBaseValueFromFeatures(features, areaRatings, districtModifier);
+	const daysUntilRemoval = Math.floor(Math.random() * 701) + 30; // 30-730 days (30 days to 2 years)
+	
+	return {
+		id,
+		baseValue,
+		features,
+		area,
+		district,
+		districtModifier,
+		maintenance,
+		daysUntilRemoval,
+		daysOnMarket: 0,
+		listedDate: currentDate
+	};
+}
+
+function generateInitialMarket(areas: Area[], startDate: GameDate): MarketProperty[] {
+	const count = MAX_MARKET_PROPERTIES; // Full market of 50 properties
+	return Array.from({ length: count }, () => generateMarketProperty(areas, startDate));
+}
+
+function generateAuctionProperty(areas: Area[], currentDate: GameDate): AuctionProperty {
+	const id = `auction-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+	const maintenance = Math.floor(Math.random() * 50); // 0-49% (distressed properties)
 	const features = generateRandomFeatures();
 	const areaNames: AreaName[] = areas.map(a => a.name);
 	const area = randomChoice(areaNames);
@@ -137,13 +167,25 @@ function generateMarketProperty(areas: Area[]): MarketProperty {
 		area,
 		district,
 		districtModifier,
-		maintenance
+		maintenance,
+		daysOnMarket: 0,
+		listedDate: currentDate
 	};
 }
 
-function generateInitialMarket(areas: Area[]): MarketProperty[] {
-	const count = MAX_MARKET_PROPERTIES; // Full market of 50 properties
-	return Array.from({ length: count }, () => generateMarketProperty(areas));
+function generateInitialAuction(): AuctionProperty[] {
+	return []; // No initial auction properties
+}
+
+function applyInflationToAuction(auctionProperties: AuctionProperty[], inflationRate: number): AuctionProperty[] {
+	if (inflationRate === 0) return auctionProperties;
+	
+	const multiplier = 1 + (inflationRate / 100);
+	
+	return auctionProperties.map(property => ({
+		...property,
+		baseValue: Math.round(property.baseValue * multiplier)
+	}));
 }
 
 function createInitialState(): GameState {
@@ -152,22 +194,26 @@ function createInitialState(): GameState {
 	
 	return {
 		player: {
-			cash: 5000,
+			cash: 50000,
 			accruedInterest: 0,
-			properties: []
+			properties: [],
+			mortgages: []
 		},
 		settings: {
 			defaultRentMarkup: 5.0 // Default 5% rent markup for all new listings
 		},
-		propertyMarket: generateInitialMarket(areas),
+		propertyMarket: generateInitialMarket(areas, startDate),
+		auctionMarket: generateInitialAuction(),
 		areas,
 		economy: {
 			baseRate: INITIAL_BASE_RATE,
-			inflationRate: 0.5, // Start at target
+			inflationRate: 1.0, // Start at expansion level (1% quarterly = 4% annual)
 			economicPhase: 'expansion',
-			quarterlyInflationHistory: [0.5, 0.5, 0.5, 0.5], // Initialize with target
+			quarterlyInflationHistory: [1.0, 1.0, 1.0, 1.0], // Initialize with expansion inflation
 			lastQuarterDate: startDate,
-			quartersSincePhaseChange: 0
+			quartersSincePhaseChange: 0,
+			targetInflationRate: 1.0,
+			targetBaseRate: INITIAL_BASE_RATE
 		},
 		staff: {
 			estateAgents: [],
@@ -242,7 +288,7 @@ function loadStateFromStorage(): GameState {
 				}
 				
 				if (!parsed.propertyMarket) {
-					parsed.propertyMarket = generateInitialMarket(parsed.areas);
+					parsed.propertyMarket = generateInitialMarket(parsed.areas, parsed.gameTime.currentDate);
 				}
 				
 				// Version 6: Add features to market properties
@@ -338,8 +384,18 @@ function loadStateFromStorage(): GameState {
 						economicPhase: 'expansion',
 						quarterlyInflationHistory: [0.5, 0.5, 0.5, 0.5],
 						lastQuarterDate: parsed.gameTime.currentDate,
-						quartersSincePhaseChange: 0
+						quartersSincePhaseChange: 0,
+						targetInflationRate: 0.5,
+						targetBaseRate: INITIAL_BASE_RATE
 					};
+				}
+				
+				// Add target fields to existing economy objects
+				if (!(parsed.economy as any).targetInflationRate) {
+					(parsed.economy as any).targetInflationRate = parsed.economy.inflationRate;
+				}
+				if (!(parsed.economy as any).targetBaseRate) {
+					(parsed.economy as any).targetBaseRate = parsed.economy.baseRate;
 				}
 				
 				// Add baseRateAtStart to existing tenancies
@@ -395,6 +451,35 @@ function loadStateFromStorage(): GameState {
 					(parsed as any).settings = {
 						defaultRentMarkup: 5.0
 					};
+				}
+				
+				// Version 13: Add market property time tracking fields and mortgages
+				parsed.propertyMarket = parsed.propertyMarket.map((marketProp: any) => {
+					if (!(marketProp as any).daysUntilRemoval || !(marketProp as any).daysOnMarket || !(marketProp as any).listedDate) {
+						// Generate random days until removal (30-730 days)
+						const daysUntilRemoval = Math.floor(Math.random() * 701) + 30;
+						// Random days on market (0-90 days to simulate existing listings)
+						const daysOnMarket = Math.floor(Math.random() * 91);
+						
+						return {
+							...marketProp,
+							maintenance: marketProp.maintenance < 75 ? Math.floor(Math.random() * 26) + 75 : marketProp.maintenance,
+							daysUntilRemoval,
+							daysOnMarket,
+							listedDate: parsed.gameTime.currentDate
+						};
+					}
+					return marketProp;
+				});
+				
+				// Version 14: Add mortgages array and auction market
+				if (!(parsed.player as any).mortgages) {
+					(parsed.player as any).mortgages = [];
+				}
+				
+				// Version 14: Add auction market
+				if (!(parsed as any).auctionMarket) {
+					(parsed as any).auctionMarket = [];
 				}
 				
 				parsed.version = GAME_VERSION;
@@ -499,32 +584,36 @@ function updateAreaRatings(areas: Area[]): Area[] {
 }
 
 // Economic cycle functions
-function generateQuarterlyInflation(phase: EconomicPhase): number {
-	// Base inflation ranges by economic phase
+function generateTargetInflation(phase: EconomicPhase): number {
+	// Quarterly inflation ranges by economic phase (annual rates divided by 4)
 	const ranges: Record<EconomicPhase, { min: number; max: number }> = {
-		recession: { min: -0.5, max: 0.3 },    // Deflation possible, low inflation
-		recovery: { min: 0.2, max: 0.7 },      // Rising inflation
-		expansion: { min: 0.4, max: 1.0 },     // Higher inflation
-		peak: { min: 0.6, max: 1.3 }           // Risk of high inflation
+		recession: { min: -0.25, max: 0.5 },   // -1% to +2% annual
+		recovery: { min: 0.25, max: 0.75 },    // 1% to 3% annual
+		expansion: { min: 0.75, max: 1.5 },    // 3% to 6% annual
+		peak: { min: 1.25, max: 2.5 }          // 5% to 10% annual
 	};
 	
 	const range = ranges[phase];
 	return range.min + Math.random() * (range.max - range.min);
 }
 
-function adjustBaseRate(currentRate: number, inflationRate: number): number {
-	// Calculate how far from target (0.5% quarterly = 2% annually)
-	const inflationGap = inflationRate - TARGET_QUARTERLY_INFLATION;
+function generateTargetBaseRate(phase: EconomicPhase): number {
+	// Base rate ranges by economic phase (matching UK table)
+	const ranges: Record<EconomicPhase, { min: number; max: number }> = {
+		recession: { min: 0.1, max: 1.5 },     // 0% to 1.5%
+		recovery: { min: 1.0, max: 3.0 },      // 1% to 3%
+		expansion: { min: 3.0, max: 6.0 },     // 3% to 6%
+		peak: { min: 5.0, max: 10.0 }          // 5% to 10%
+	};
 	
-	// Sensitivity: how much to adjust rate for each percentage point of inflation gap
-	const sensitivity = 2.0;
-	
-	// Calculate adjustment
-	const adjustment = inflationGap * sensitivity;
-	
-	// Apply adjustment and enforce minimum
-	const newRate = currentRate + adjustment;
-	return Math.max(MIN_BASE_RATE, newRate);
+	const range = ranges[phase];
+	return range.min + Math.random() * (range.max - range.min);
+}
+
+function graduallyAdjustValue(current: number, target: number, adjustmentRate: number = 0.3): number {
+	// Move current value towards target by adjustmentRate (30% default)
+	const gap = target - current;
+	return current + gap * adjustmentRate;
 }
 
 function progressEconomicCycle(economy: Economy): EconomicPhase {
@@ -579,18 +668,33 @@ function updateEconomyQuarterly(economy: Economy, properties: Property[], market
 	properties: Property[];
 	marketProperties: MarketProperty[];
 } {
-	// Generate new inflation for this quarter
-	const newInflationRate = generateQuarterlyInflation(economy.economicPhase);
-	
-	// Update inflation history (keep last 4 quarters)
-	const newHistory = [...economy.quarterlyInflationHistory.slice(-3), newInflationRate];
-	
-	// Adjust base rate based on inflation
-	const newBaseRate = adjustBaseRate(economy.baseRate, newInflationRate);
-	
 	// Check for phase transition
 	const newPhase = progressEconomicCycle(economy);
 	const phaseChanged = newPhase !== economy.economicPhase;
+	
+	// If phase changed, generate new targets for the new phase
+	let targetInflation = economy.targetInflationRate;
+	let targetBaseRate = economy.targetBaseRate;
+	
+	if (phaseChanged) {
+		targetInflation = generateTargetInflation(newPhase);
+		targetBaseRate = generateTargetBaseRate(newPhase);
+	} else {
+		// 20% chance to update targets within the same phase
+		if (Math.random() < 0.2) {
+			targetInflation = generateTargetInflation(economy.economicPhase);
+			targetBaseRate = generateTargetBaseRate(economy.economicPhase);
+		}
+	}
+	
+	// Gradually adjust inflation toward target (30% of gap per quarter)
+	const newInflationRate = graduallyAdjustValue(economy.inflationRate, targetInflation, 0.3);
+	
+	// Gradually adjust base rate toward target (30% of gap per quarter)
+	const newBaseRate = Math.max(MIN_BASE_RATE, graduallyAdjustValue(economy.baseRate, targetBaseRate, 0.3));
+	
+	// Update inflation history (keep last 4 quarters)
+	const newHistory = [...economy.quarterlyInflationHistory.slice(-3), newInflationRate];
 	
 	// Apply inflation to all property base values
 	const updatedProperties = applyInflationToProperties(properties, newInflationRate);
@@ -603,11 +707,50 @@ function updateEconomyQuarterly(economy: Economy, properties: Property[], market
 			inflationRate: newInflationRate,
 			economicPhase: newPhase,
 			quarterlyInflationHistory: newHistory,
-			quartersSincePhaseChange: phaseChanged ? 0 : economy.quartersSincePhaseChange + 1
+			quartersSincePhaseChange: phaseChanged ? 0 : economy.quartersSincePhaseChange + 1,
+			targetInflationRate: targetInflation,
+			targetBaseRate: targetBaseRate
 		},
 		properties: updatedProperties,
 		marketProperties: updatedMarket
 	};
+}
+
+// Mortgage calculation functions
+function calculateMortgageInterestRate(
+	baseRate: number,
+	depositPercentage: DepositPercentage,
+	mortgageType: MortgageType
+): number {
+	const depositPremium = DEPOSIT_RATE_PREMIUMS[depositPercentage];
+	const btlPremium = mortgageType === 'btl' ? BTL_RATE_PREMIUM : 0;
+	return baseRate + depositPremium + btlPremium;
+}
+
+function calculateMonthlyMortgagePayment(
+	loanAmount: number,
+	annualInterestRate: number,
+	termYears: TermLength,
+	mortgageType: MortgageType
+): number {
+	if (mortgageType === 'btl') {
+		// BTL: Interest only, no principal repayment
+		return 0;
+	}
+	
+	// Standard mortgage: Calculate amortization payment
+	const monthlyRate = annualInterestRate / 100 / 12;
+	const numPayments = termYears * 12;
+	
+	// M = P * [r(1+r)^n] / [(1+r)^n - 1]
+	const payment = loanAmount * (monthlyRate * Math.pow(1 + monthlyRate, numPayments)) / 
+		(Math.pow(1 + monthlyRate, numPayments) - 1);
+	
+	return payment;
+}
+
+function calculateMonthlyMortgageInterest(outstandingBalance: number, annualInterestRate: number): number {
+	return (outstandingBalance * annualInterestRate / 100) / 12;
 }
 
 function createGameStore() {
@@ -658,6 +801,34 @@ function createGameStore() {
 						...caretaker,
 						experiencePoints: Math.min(caretaker.experiencePoints + xpGain, nextThreshold)
 					};
+				});
+
+				// Check and adjust variable rate mortgages daily (when fixed period expires)
+				state.player.mortgages = state.player.mortgages.map((mortgage) => {
+					if (isAfterOrEqual(newDate, mortgage.fixedPeriodEndDate)) {
+						const newRate = calculateMortgageInterestRate(
+							state.economy.baseRate,
+							mortgage.depositPercentage,
+							mortgage.mortgageType
+						);
+						
+						// Only update if rate has changed
+						if (newRate !== mortgage.interestRate) {
+							const newMonthlyPayment = calculateMonthlyMortgagePayment(
+								mortgage.outstandingBalance,
+								newRate,
+								mortgage.termLengthYears,
+								mortgage.mortgageType
+							);
+							
+							return {
+								...mortgage,
+								interestRate: newRate,
+								monthlyPayment: newMonthlyPayment
+							};
+						}
+					}
+					return mortgage;
 				});
 
 				// Estate agent auto-listing
@@ -730,9 +901,10 @@ function createGameStore() {
 				// Try to fill properties WITHOUT estate agents (manual tenant finding)
 				state.player.properties = state.player.properties.map((property) => {
 					// Skip if already has estate agent (handled above)
+					// Skip if not manually listed (player must click "List Now")
 					// Skip if already has tenant
 					// Skip if can't be let out (maintenance < 25 or under maintenance)
-					if (!property.assignedEstateAgent && !property.tenancy && canBeLetOut(property)) {
+					if (!property.assignedEstateAgent && property.listedDate && !property.tenancy && canBeLetOut(property)) {
 						return tryFillProperty(property, newDate, state.areas, state.economy.baseRate);
 					}
 					return property;
@@ -787,6 +959,47 @@ function createGameStore() {
 
 					state.player.cash += totalRent;
 					state.gameTime.lastRentCollectionDate = newDate;
+
+					// Process mortgage payments and interest
+					state.player.mortgages = state.player.mortgages.map((mortgage) => {
+						let updatedMortgage = { ...mortgage };
+						
+						// Calculate and deduct monthly payment/interest
+						const monthlyInterest = calculateMonthlyMortgageInterest(
+							updatedMortgage.outstandingBalance,
+							updatedMortgage.interestRate
+						);
+						
+						// For standard mortgages, pay principal + interest
+						// For BTL, only pay interest
+						const totalMonthlyPayment = updatedMortgage.mortgageType === 'standard' 
+							? updatedMortgage.monthlyPayment 
+							: monthlyInterest;
+						
+						state.player.cash -= totalMonthlyPayment;
+						
+						// Reduce outstanding balance (standard only)
+						if (updatedMortgage.mortgageType === 'standard') {
+							const principalPayment = totalMonthlyPayment - monthlyInterest;
+							updatedMortgage.outstandingBalance = Math.max(
+								0,
+								updatedMortgage.outstandingBalance - principalPayment
+							);
+						}
+						
+						return updatedMortgage;
+					});
+					
+					// Remove fully paid off mortgages
+					state.player.mortgages = state.player.mortgages.filter(
+						(m) => m.outstandingBalance > 0.01
+					);
+					
+					// Handle negative balance - charge interest at base rate
+					if (state.player.cash < 0) {
+						const negativeBalanceInterest = Math.abs(state.player.cash) * (state.economy.baseRate / 100) / 12;
+						state.player.cash -= negativeBalanceInterest;
+					}
 
 					// Calculate total monthly wages
 					let totalWages = 0;
@@ -932,7 +1145,18 @@ function createGameStore() {
 						const roll = Math.random() * 100;
 						if (roll < dailySaleChance) {
 							// Property sold!
-							state.player.cash += askingPrice;
+							// Check if property has a mortgage and pay it off
+							const mortgage = state.player.mortgages.find((m) => m.propertyId === property.id);
+							if (mortgage) {
+								const netProceeds = askingPrice - mortgage.outstandingBalance;
+								state.player.cash += netProceeds;
+								// Mark mortgage propertyId as null (debt remains if underwater)
+								state.player.mortgages = state.player.mortgages.map((m) => 
+									m.id === mortgage.id ? { ...m, propertyId: null } : m
+								);
+							} else {
+								state.player.cash += askingPrice;
+							}
 							propertiesToRemove.push(property.id);
 							return property;
 						}
@@ -954,21 +1178,45 @@ function createGameStore() {
 					(p) => !propertiesToRemove.includes(p.id)
 				);
 
+				// Increment daysOnMarket for all market properties
+				state.propertyMarket = state.propertyMarket.map((marketProp) => ({
+					...marketProp,
+					daysOnMarket: marketProp.daysOnMarket + 1
+				}));
+
+				// Remove properties that have exceeded their time on market
+				state.propertyMarket = state.propertyMarket.filter((marketProp) => 
+					marketProp.daysOnMarket < marketProp.daysUntilRemoval
+				);
+
 				// Sporadically add new market properties (if under cap)
 				if (state.propertyMarket.length < MAX_MARKET_PROPERTIES) {
 					// 10% chance per day to add a new property
 					const spawnChance = Math.random() * 100;
 					if (spawnChance < 10) {
-						state.propertyMarket.push(generateMarketProperty(state.areas));
+						state.propertyMarket.push(generateMarketProperty(state.areas, newDate));
 					}
 				}
 
-				// Properties leave the market (other buyers or withdrawn listings)
-				state.propertyMarket = state.propertyMarket.filter(() => {
-					// 5% chance per property to leave the market
-					const exitChance = Math.random() * 100;
-					return exitChance >= 5; // Keep property if roll is >= 5 (95% chance to stay)
-				});
+				// Increment daysOnMarket for all auction properties
+				state.auctionMarket = state.auctionMarket.map((auctionProp) => ({
+					...auctionProp,
+					daysOnMarket: auctionProp.daysOnMarket + 1
+				}));
+
+				// Remove auction properties that have been on market for 30 days
+				state.auctionMarket = state.auctionMarket.filter((auctionProp) => 
+					auctionProp.daysOnMarket < 30
+				);
+
+				// Sporadically add new auction properties (if under cap)
+				if (state.auctionMarket.length < MAX_AUCTION_PROPERTIES) {
+					// 10% chance per day to add a new property
+					const spawnChance = Math.random() * 100;
+					if (spawnChance < 10) {
+						state.auctionMarket.push(generateAuctionProperty(state.areas, newDate));
+					}
+				}
 
 				state.gameTime.currentDate = newDate;
 				saveStateToStorage(state);
@@ -1096,11 +1344,18 @@ function createGameStore() {
 					return state; // Not enough cash
 				}
 
-				// Calculate acceptance chance: (offer%)^10
-				const acceptanceChance = Math.pow(offerPercentage / 100, 10);
+				// Calculate base acceptance chance: (offer%)^10
+				const baseAcceptanceChance = Math.pow(offerPercentage / 100, 10);
+				
+				// Calculate time-based bonus: 5% per 6 months (180 days) on market
+				const timeBonus = Math.floor(marketProperty.daysOnMarket / 180) * 5;
+				
+				// Apply additive bonus (convert percentages to decimal for comparison)
+				const finalAcceptanceChance = (baseAcceptanceChance * 100 + timeBonus) / 100;
+				
 				const roll = Math.random();
 
-				if (roll < acceptanceChance) {
+				if (roll < finalAcceptanceChance) {
 					// Offer accepted!
 					const newProperty: Property = {
 						id: `property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
@@ -1437,6 +1692,273 @@ function createGameStore() {
 		setDefaultRentMarkup: (rentMarkup: RentMarkup) => {
 			update((state) => {
 				state.settings.defaultRentMarkup = rentMarkup;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		buyPropertyWithMortgage: (
+			marketPropertyId: string,
+			mortgageType: MortgageType,
+			depositPercentage: DepositPercentage,
+			termLength: TermLength,
+			fixedPeriod: FixedPeriod
+		) => {
+			update((state) => {
+				const marketProperty = state.propertyMarket.find((p) => p.id === marketPropertyId);
+				if (!marketProperty) return state;
+
+				const marketValue = marketProperty.baseValue * (marketProperty.maintenance / 100);
+				const depositAmount = marketValue * (depositPercentage / 100);
+				const loanAmount = marketValue - depositAmount;
+
+				if (state.player.cash < depositAmount) {
+					return state; // Not enough cash for deposit
+				}
+
+				// Calculate interest rate and monthly payment
+				const interestRate = calculateMortgageInterestRate(
+					state.economy.baseRate,
+					depositPercentage,
+					mortgageType
+				);
+				const monthlyPayment = calculateMonthlyMortgagePayment(
+					loanAmount,
+					interestRate,
+					termLength,
+					mortgageType
+				);
+
+				// Create property
+				const propertyId = `property-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+				const newProperty: Property = {
+					id: propertyId,
+					name: generatePropertyName(marketProperty.features),
+					baseValue: marketProperty.baseValue,
+					purchaseBaseValue: marketProperty.baseValue,
+					features: marketProperty.features,
+					area: marketProperty.area,
+					district: marketProperty.district,
+					districtModifier: marketProperty.districtModifier,
+					totalIncomeEarned: 0,
+					tenancy: null,
+					vacantSettings: {
+						rentMarkup: 5.0,
+						periodMonths: 12
+					},
+					maintenance: marketProperty.maintenance,
+					isUnderMaintenance: false,
+					maintenanceStartDate: null,
+					saleInfo: null,
+					assignedEstateAgent: null,
+					assignedCaretaker: null,
+					listedDate: null
+				};
+
+				// Create mortgage
+				const fixedPeriodEndDate = addMonths(state.gameTime.currentDate, fixedPeriod * 12);
+				const mortgage: Mortgage = {
+					id: `mortgage-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+					propertyId: propertyId,
+					propertyName: newProperty.name,
+					mortgageType,
+					originalLoanAmount: loanAmount,
+					outstandingBalance: loanAmount,
+					depositPercentage,
+					termLengthYears: termLength,
+					fixedPeriodYears: fixedPeriod,
+					fixedPeriodEndDate,
+					interestRate,
+					monthlyPayment,
+					startDate: state.gameTime.currentDate
+				};
+
+				state.player.cash -= depositAmount;
+				state.player.properties.push(newProperty);
+				state.player.mortgages.push(mortgage);
+				state.propertyMarket = state.propertyMarket.filter((p) => p.id !== marketPropertyId);
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		remortgageProperty: (
+			propertyId: string,
+			mortgageType: MortgageType,
+			depositPercentage: DepositPercentage,
+			termLength: TermLength,
+			fixedPeriod: FixedPeriod
+		) => {
+			update((state) => {
+				const property = state.player.properties.find((p) => p.id === propertyId);
+				const oldMortgage = state.player.mortgages.find((m) => m.propertyId === propertyId);
+				
+				if (!property || !oldMortgage) return state;
+
+				// Calculate equity
+				const currentValue = calculateMarketValue(property);
+				const equity = currentValue - oldMortgage.outstandingBalance;
+
+				if (equity < 0) {
+					return state; // Negative equity - cannot remortgage
+				}
+
+				// Use equity as deposit
+				const depositAmount = currentValue * (depositPercentage / 100);
+				const loanAmount = currentValue - depositAmount;
+
+				if (equity < depositAmount) {
+					return state; // Not enough equity for this deposit percentage
+				}
+
+				// Calculate new interest rate and monthly payment
+				const interestRate = calculateMortgageInterestRate(
+					state.economy.baseRate,
+					depositPercentage,
+					mortgageType
+				);
+				const monthlyPayment = calculateMonthlyMortgagePayment(
+					loanAmount,
+					interestRate,
+					termLength,
+					mortgageType
+				);
+
+				const fixedPeriodEndDate = addMonths(state.gameTime.currentDate, fixedPeriod * 12);
+
+				// Remove old mortgage and create new one
+				state.player.mortgages = state.player.mortgages.filter((m) => m.id !== oldMortgage.id);
+				
+				const newMortgage: Mortgage = {
+					id: `mortgage-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+					propertyId: propertyId,
+					propertyName: property.name,
+					mortgageType,
+					originalLoanAmount: loanAmount,
+					outstandingBalance: loanAmount,
+					depositPercentage,
+					termLengthYears: termLength,
+					fixedPeriodYears: fixedPeriod,
+					fixedPeriodEndDate,
+					interestRate,
+					monthlyPayment,
+					startDate: state.gameTime.currentDate
+				};
+
+				state.player.mortgages.push(newMortgage);
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		payOffMortgage: (mortgageId: string) => {
+			update((state) => {
+				const mortgage = state.player.mortgages.find((m) => m.id === mortgageId);
+				if (!mortgage) return state;
+
+				if (state.player.cash < mortgage.outstandingBalance) {
+					return state; // Not enough cash
+				}
+
+				state.player.cash -= mortgage.outstandingBalance;
+				state.player.mortgages = state.player.mortgages.filter((m) => m.id !== mortgageId);
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		buyAuctionPropertyInstant: (auctionPropertyId: string) => {
+			update((state) => {
+				const auctionProperty = state.auctionMarket.find((p) => p.id === auctionPropertyId);
+				if (!auctionProperty) return state;
+
+				const marketValue = auctionProperty.baseValue * (auctionProperty.maintenance / 100);
+				if (state.player.cash < marketValue) {
+					return state; // Not enough cash
+				}
+
+				// Create new property from auction property (cannot be mortgaged)
+				const newProperty: Property = {
+					id: `property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+					name: generatePropertyName(auctionProperty.features),
+					baseValue: auctionProperty.baseValue,
+					purchaseBaseValue: auctionProperty.baseValue,
+					features: auctionProperty.features,
+					area: auctionProperty.area,
+					district: auctionProperty.district,
+					districtModifier: auctionProperty.districtModifier,
+					totalIncomeEarned: 0,
+					tenancy: null,
+					vacantSettings: {
+						rentMarkup: 5.0,
+						periodMonths: 12
+					},
+					maintenance: auctionProperty.maintenance,
+					isUnderMaintenance: false,
+					maintenanceStartDate: null,
+					saleInfo: null,
+					assignedEstateAgent: null,
+					assignedCaretaker: null,
+					listedDate: null
+				};
+
+				state.player.cash -= marketValue;
+				state.player.properties.push(newProperty);
+				state.auctionMarket = state.auctionMarket.filter((p) => p.id !== auctionPropertyId);
+
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		makeAuctionOffer: (auctionPropertyId: string, offerPercentage: number) => {
+			update((state) => {
+				const auctionProperty = state.auctionMarket.find((p) => p.id === auctionPropertyId);
+				if (!auctionProperty) return state;
+
+				const marketValue = auctionProperty.baseValue * (auctionProperty.maintenance / 100);
+				const offerAmount = marketValue * (offerPercentage / 100);
+				
+				if (state.player.cash < offerAmount) {
+					return state; // Not enough cash
+				}
+
+				// Calculate acceptance chance: (offer%)^3 for auction properties (better than regular market)
+				const acceptanceChance = Math.pow(offerPercentage / 100, 3);
+				
+				const roll = Math.random();
+
+				if (roll < acceptanceChance) {
+					// Offer accepted!
+					const newProperty: Property = {
+						id: `property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+						name: generatePropertyName(auctionProperty.features),
+						baseValue: auctionProperty.baseValue,
+						purchaseBaseValue: auctionProperty.baseValue,
+						features: auctionProperty.features,
+						area: auctionProperty.area,
+						district: auctionProperty.district,
+						districtModifier: auctionProperty.districtModifier,
+						totalIncomeEarned: 0,
+						tenancy: null,
+						vacantSettings: {
+							rentMarkup: 5,
+							periodMonths: 12
+						},
+						maintenance: auctionProperty.maintenance,
+						isUnderMaintenance: false,
+						maintenanceStartDate: null,
+						saleInfo: null,
+						assignedEstateAgent: null,
+						assignedCaretaker: null,
+						listedDate: null
+					};
+
+					state.player.cash -= offerAmount;
+					state.player.properties.push(newProperty);
+				}
+
+				// Whether accepted or rejected, remove from auction market
+				state.auctionMarket = state.auctionMarket.filter((p) => p.id !== auctionPropertyId);
+
 				saveStateToStorage(state);
 				return state;
 			});

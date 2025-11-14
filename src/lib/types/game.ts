@@ -77,6 +77,27 @@ export interface SaleInfo {
 	daysOnMarket: number;
 }
 
+export type MortgageType = 'btl' | 'standard';
+export type DepositPercentage = 10 | 25 | 50 | 75;
+export type TermLength = 10 | 15 | 20 | 25 | 30;
+export type FixedPeriod = 2 | 3 | 5;
+
+export interface Mortgage {
+	id: string;
+	propertyId: string | null; // null = property sold but debt remains
+	propertyName: string; // Keep name for reference even after sale
+	mortgageType: MortgageType;
+	originalLoanAmount: number;
+	outstandingBalance: number;
+	depositPercentage: DepositPercentage;
+	termLengthYears: TermLength;
+	fixedPeriodYears: FixedPeriod;
+	fixedPeriodEndDate: GameDate;
+	interestRate: number; // Locked rate during fixed period
+	monthlyPayment: number; // 0 for BTL (interest only)
+	startDate: GameDate;
+}
+
 export interface Property {
 	id: string;
 	name: string;
@@ -105,7 +126,22 @@ export interface MarketProperty {
 	area: AreaName;
 	district: District;
 	districtModifier: number;
-	maintenance: number; // 1-100, percentage of maintenance level
+	maintenance: number; // 75-100, percentage of maintenance level
+	daysUntilRemoval: number; // Hidden: 30-730 days until property leaves market
+	daysOnMarket: number; // Visible: days since property was listed
+	listedDate: GameDate; // Visible: date when property was first listed
+}
+
+export interface AuctionProperty {
+	id: string;
+	baseValue: number;
+	features: PropertyFeatures;
+	area: AreaName;
+	district: District;
+	districtModifier: number;
+	maintenance: number; // 0-49, percentage of maintenance level (distressed properties)
+	daysOnMarket: number; // Days since property was listed
+	listedDate: GameDate; // Date when property was first listed
 }
 
 export type EconomicPhase = 'recession' | 'recovery' | 'expansion' | 'peak';
@@ -117,6 +153,8 @@ export interface Economy {
 	quarterlyInflationHistory: number[]; // Track last 4 quarters
 	lastQuarterDate: GameDate; // Track when quarters change (every 3 months)
 	quartersSincePhaseChange: number; // Track cycle progression
+	targetInflationRate: number; // Target inflation for gradual adjustment
+	targetBaseRate: number; // Target base rate for gradual adjustment
 }
 
 // Staff types
@@ -155,11 +193,13 @@ export interface GameState {
 		cash: number;
 		accruedInterest: number;
 		properties: Property[];
+		mortgages: Mortgage[];
 	};
 	settings: {
 		defaultRentMarkup: RentMarkup; // Global target rent for all new listings
 	};
 	propertyMarket: MarketProperty[];
+	auctionMarket: AuctionProperty[];
 	areas: Area[];
 	economy: Economy;
 	staff: {
@@ -190,6 +230,7 @@ export const TARGET_QUARTERLY_INFLATION = 0.5; // Target 2% annually = ~0.5% qua
 export const BASE_FILL_CHANCE = 3; // Base chance per day to fill a property (%)
 export const BASE_SALE_CHANCE = 10; // Base chance per day to sell a property (%)
 export const MAX_MARKET_PROPERTIES = 50; // Maximum properties on market at once
+export const MAX_AUCTION_PROPERTIES = 5; // Maximum auction properties at once
 export const PROPERTY_BASE_VALUE = 1000; // Base value before feature multipliers
 
 // District names
@@ -304,6 +345,16 @@ export const PROMOTION_BONUS_MULTIPLIER = 2.0;  // 2x current salary one-time
 export const PROMOTION_WAGE_INCREASE = 0.2;     // +20% permanent
 export const XP_PER_PROPERTY_PER_DAY = 10;
 export const MAX_UNPAID_MONTHS = 3;
+
+// Mortgage constants
+export const DEPOSIT_RATE_PREMIUMS: Record<DepositPercentage, number> = {
+	10: 4, // +4% to base rate
+	25: 3, // +3% to base rate
+	50: 2, // +2% to base rate
+	75: 1  // +1% to base rate
+};
+
+export const BTL_RATE_PREMIUM = 1; // +1% for BTL mortgages
 
 // Staff name generation
 export const STAFF_FIRST_NAMES = [
