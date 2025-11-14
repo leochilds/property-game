@@ -333,7 +333,7 @@
 				>
 					{#each Array.from({ length: 10 }, (_, i) => i + 1) as district}
 						<option value={district}>
-							District {district} - {formatCurrency(DISTRICT_BASE_SALARIES[district as District])}/month
+							District {district} - {formatCurrency(DISTRICT_BASE_SALARIES[district as District] * $gameState.staff.baseSalaryInflationMultiplier)}/month
 						</option>
 					{/each}
 				</select>
