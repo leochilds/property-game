@@ -21,7 +21,7 @@
 	}, {} as Record<District, number>);
 
 	function calculateMarketPropertyValue(marketProperty: MarketProperty): number {
-		return marketProperty.baseValue * (marketProperty.maintenance / 100);
+		return marketProperty.baseValue * (0.5 + marketProperty.maintenance / 200);
 	}
 
 	function calculateOfferAcceptanceChance(offerPercentage: number, daysOnMarket: number): { base: number; timeBonus: number; final: number } {

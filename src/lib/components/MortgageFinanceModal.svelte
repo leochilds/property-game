@@ -12,7 +12,7 @@
 	let termLength: TermLength = 25;
 	let fixedPeriod: FixedPeriod = 2;
 
-	$: marketValue = marketProperty.baseValue * (marketProperty.maintenance / 100);
+	$: marketValue = marketProperty.baseValue * (0.5 + marketProperty.maintenance / 200);
 	$: depositAmount = marketValue * (depositPercentage / 100);
 	$: loanAmount = marketValue - depositAmount;
 	$: depositPremium = DEPOSIT_RATE_PREMIUMS[depositPercentage];

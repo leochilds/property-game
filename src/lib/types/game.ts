@@ -96,6 +96,26 @@ export interface Mortgage {
 	interestRate: number; // Locked rate during fixed period
 	monthlyPayment: number; // 0 for BTL (interest only)
 	startDate: GameDate;
+	totalInterestPaid: number; // Cumulative interest paid
+	totalPrincipalPaid: number; // Cumulative principal paid (equity built)
+}
+
+export interface PropertySale {
+	id: string;
+	name: string;
+	features: PropertyFeatures;
+	area: AreaName;
+	district: District;
+	purchasePrice: number; // What you paid for it
+	purchaseDate: GameDate;
+	salePrice: number; // What you sold it for
+	saleDate: GameDate;
+	totalRentIncome: number; // Total rent earned while owned
+	totalMaintenancePaid: number; // Total maintenance paid while owned
+	totalMortgageInterest: number; // Total mortgage interest paid (if any)
+	totalMortgagePrincipal: number; // Total mortgage principal paid (if any)
+	hadMortgage: boolean;
+	mortgageBalanceAtSale: number; // Outstanding mortgage at time of sale
 }
 
 export interface Property {
@@ -103,6 +123,9 @@ export interface Property {
 	name: string;
 	baseValue: number;
 	purchaseBaseValue: number; // Base value when property was acquired
+	purchasePrice: number; // Actual price paid (may differ from baseValue)
+	purchaseDate: GameDate; // When property was acquired
+	totalMaintenancePaid: number; // Cumulative maintenance costs
 	features: PropertyFeatures;
 	area: AreaName;
 	district: District;
@@ -188,12 +211,86 @@ export interface Caretaker extends BaseStaff {
 
 export type Staff = EstateAgent | Caretaker;
 
+export interface ForeclosureWarning {
+	isActive: boolean;
+	daysRemaining: number;
+	triggeredDate: GameDate;
+	currentDebt: number;
+	currentEquity: number;
+}
+
+export interface GameOverStats {
+	gameDuration: {
+		years: number;
+		months: number;
+		days: number;
+	};
+	totalPropertiesOwned: number;
+	totalPropertiesSold: number;
+	currentPortfolio: number;
+	totalRentIncome: number;
+	totalMaintenanceCosts: number;
+	totalMortgageInterest: number;
+	totalStaffWages: number;
+	totalDebt: number;
+	peakNetWorth: number;
+	peakNetWorthDate: GameDate;
+	peakPropertiesOwned: number;
+	bestProperty: {
+		name: string;
+		totalProfit: number;
+	} | null;
+}
+
+export interface GameOver {
+	triggeredDate: GameDate;
+	finalStats: GameOverStats;
+}
+
+export interface GameWinStats {
+	gameDuration: {
+		years: number;
+		months: number;
+		days: number;
+	};
+	totalPropertiesOwned: number;
+	totalPropertiesSold: number;
+	currentPortfolio: number;
+	totalRentIncome: number;
+	totalMaintenanceCosts: number;
+	totalMortgageInterest: number;
+	totalStaffWages: number;
+	finalNetWorth: number;
+	peakNetWorth: number;
+	peakNetWorthDate: GameDate;
+	peakPropertiesOwned: number;
+	bestProperty: {
+		name: string;
+		totalProfit: number;
+	} | null;
+}
+
+export interface GameWin {
+	triggeredDate: GameDate;
+	finalStats: GameWinStats;
+	bankComparisonValue: number;
+}
+
+export type PrestigeBonusType = 'cash' | 'property';
+
+export interface PrestigeBonus {
+	type: PrestigeBonusType;
+	level: number;
+}
+
 export interface GameState {
 	player: {
 		cash: number;
 		accruedInterest: number;
+		totalInterestEarned: number;
 		properties: Property[];
 		mortgages: Mortgage[];
+		propertySales: PropertySale[]; // History of all property sales
 	};
 	settings: {
 		defaultRentMarkup: RentMarkup; // Global target rent for all new listings
@@ -212,7 +309,22 @@ export interface GameState {
 		lastInterestCalculationDate: GameDate;
 		speed: TimeSpeed;
 		isPaused: boolean;
+		showBalanceSheetModal: boolean;
 	};
+	balanceSheetHistory: Array<import('$lib/utils/balanceSheet').OverallBalanceSheet>;
+	foreclosureWarning: ForeclosureWarning | null;
+	gameOver: GameOver | null;
+	gameWin: GameWin | null;
+	trackingStats: {
+		peakNetWorth: number;
+		peakNetWorthDate: GameDate;
+		peakPropertiesOwned: number;
+		totalStaffWagesPaid: number;
+	};
+	bankComparisonValue: number;
+	prestigeLevel: number;
+	prestigeBonuses: PrestigeBonus[];
+	canPrestigeNow: boolean;
 	version: number;
 }
 

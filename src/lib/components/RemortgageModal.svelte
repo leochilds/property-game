@@ -9,19 +9,31 @@
 	export let onClose: () => void;
 
 	let mortgageType: MortgageType = mortgage.mortgageType;
-	let depositPercentage: DepositPercentage = 25;
 	let termLength: TermLength = 25;
 	let fixedPeriod: FixedPeriod = 2;
 
-	$: currentValue = property.baseValue * (property.maintenance / 100);
+	$: currentValue = property.baseValue * (0.5 + property.maintenance / 200);
 	$: equity = currentValue - mortgage.outstandingBalance;
-	$: depositAmount = currentValue * (depositPercentage / 100);
+	$: depositAmount = equity; // Use all equity as deposit
 	$: loanAmount = currentValue - depositAmount;
-	$: canRemortgage = equity >= depositAmount;
-	$: depositPremium = DEPOSIT_RATE_PREMIUMS[depositPercentage];
+	$: canRemortgage = equity > 0;
+	
+	// Calculate actual equity percentage
+	$: equityPercentage = (equity / currentValue) * 100;
+	
+	// Round to nearest valid deposit percentage for interest rate lookup
+	$: depositPercentageForRate = roundToNearestDepositPercentage(equityPercentage);
+	$: depositPremium = DEPOSIT_RATE_PREMIUMS[depositPercentageForRate];
 	$: btlPremium = mortgageType === 'btl' ? BTL_RATE_PREMIUM : 0;
 	$: newInterestRate = $gameState.economy.baseRate + depositPremium + btlPremium;
 	$: monthlyPayment = calculateMonthlyPayment(loanAmount, newInterestRate, termLength, mortgageType);
+
+	function roundToNearestDepositPercentage(percentage: number): DepositPercentage {
+		const validPercentages: DepositPercentage[] = [10, 25, 50, 75];
+		return validPercentages.reduce((prev, curr) => 
+			Math.abs(curr - percentage) < Math.abs(prev - percentage) ? curr : prev
+		);
+	}
 
 	function calculateMonthlyPayment(
 		loan: number,
@@ -47,7 +59,7 @@
 		gameState.remortgageProperty(
 			property.id,
 			mortgageType,
-			depositPercentage,
+			depositPercentageForRate,
 			termLength,
 			fixedPeriod
 		);
@@ -129,29 +141,24 @@
 					</div>
 				</div>
 
-				<!-- Deposit (Equity) -->
+				<!-- Equity Information (Read-only) -->
 				<div>
 					<label class="block text-sm font-semibold mb-2">Equity as Deposit</label>
-					<div class="grid grid-cols-2 md:grid-cols-4 gap-2">
-						{#each [10, 25, 50, 75] as percentage}
-							{@const requiredEquity = currentValue * (percentage / 100)}
-							{@const hasEnough = equity >= requiredEquity}
-							<button
-								onclick={() => depositPercentage = percentage as DepositPercentage}
-								disabled={!hasEnough}
-								class="p-3 rounded-lg border-2 transition-colors {depositPercentage === percentage
-									? 'border-blue-500 bg-blue-900/30'
-									: hasEnough
-										? 'border-slate-600 bg-slate-700 hover:border-slate-500'
-										: 'border-slate-700 bg-slate-800 cursor-not-allowed opacity-50'}"
-							>
-								<div class="font-bold">{percentage}%</div>
-								<div class="text-xs text-slate-400">+{DEPOSIT_RATE_PREMIUMS[percentage as DepositPercentage]}% rate</div>
-								{#if !hasEnough}
-									<div class="text-xs text-red-400 mt-1">Need {formatCurrency(requiredEquity - equity)} more</div>
-								{/if}
-							</button>
-						{/each}
+					<div class="bg-slate-700 rounded-lg p-4">
+						<div class="text-sm space-y-2">
+							<div class="flex justify-between">
+								<span class="text-slate-400">All equity will be used as deposit:</span>
+								<span class="font-semibold text-yellow-400">{formatCurrency(depositAmount)}</span>
+							</div>
+							<div class="flex justify-between">
+								<span class="text-slate-400">Deposit percentage:</span>
+								<span class="font-semibold text-blue-400">{equityPercentage.toFixed(1)}%</span>
+							</div>
+							<div class="flex justify-between">
+								<span class="text-slate-400">Rate premium (closest: {depositPercentageForRate}%):</span>
+								<span class="font-semibold text-amber-400">+{depositPremium.toFixed(2)}%</span>
+							</div>
+						</div>
 					</div>
 				</div>
 
@@ -198,7 +205,7 @@
 						<div class="text-slate-400">Property Value:</div>
 						<div class="font-semibold text-right">{formatCurrency(currentValue)}</div>
 						
-						<div class="text-slate-400">Equity Used ({depositPercentage}%):</div>
+						<div class="text-slate-400">Equity Used ({equityPercentage.toFixed(1)}%):</div>
 						<div class="font-semibold text-right text-yellow-400">{formatCurrency(depositAmount)}</div>
 						
 						<div class="text-slate-400">New Loan Amount:</div>

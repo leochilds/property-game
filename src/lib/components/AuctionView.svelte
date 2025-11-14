@@ -18,7 +18,7 @@
 	}, {} as Record<District, number>);
 
 	function calculateAuctionPropertyValue(auctionProperty: AuctionProperty): number {
-		return auctionProperty.baseValue * (auctionProperty.maintenance / 100);
+		return auctionProperty.baseValue * (0.5 + auctionProperty.maintenance / 200);
 	}
 
 	function calculateOfferAcceptanceChance(offerPercentage: number): number {

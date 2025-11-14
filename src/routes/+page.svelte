@@ -8,9 +8,14 @@
 	import PropertyDetail from '$lib/components/PropertyDetail.svelte';
 	import StaffView from '$lib/components/StaffView.svelte';
 	import MortgageView from '$lib/components/MortgageView.svelte';
+	import OverallBalanceSheetView from '$lib/components/OverallBalanceSheetView.svelte';
+	import BalanceSheetModal from '$lib/components/BalanceSheetModal.svelte';
+	import GameOverModal from '$lib/components/GameOverModal.svelte';
+	import GameWinModal from '$lib/components/GameWinModal.svelte';
+	import ForeclosureWarningBanner from '$lib/components/ForeclosureWarningBanner.svelte';
 	import { formatCurrency } from '$lib/utils/format';
 
-	type View = 'market' | 'auction' | 'portfolio' | 'staff' | 'mortgages' | 'property-detail';
+	type View = 'market' | 'auction' | 'portfolio' | 'staff' | 'mortgages' | 'balance-sheet' | 'property-detail';
 	
 	let currentView: View = 'portfolio';
 	let selectedPropertyId: string | null = null;
@@ -77,6 +82,11 @@
 </script>
 
 <div class="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-white p-8">
+	<!-- Foreclosure Warning Banner -->
+	{#if $gameState.foreclosureWarning}
+		<ForeclosureWarningBanner foreclosureWarning={$gameState.foreclosureWarning} />
+	{/if}
+	
 	<div class="max-w-6xl mx-auto">
 		<!-- Header -->
 		<header class="mb-8">
@@ -108,7 +118,7 @@
 				<div class="bg-slate-700 rounded-lg p-4">
 					<div class="text-sm text-slate-400 mb-1">Bank Base Rate</div>
 					<div class="text-2xl font-bold text-blue-400">{$gameState.economy.baseRate.toFixed(2)}%</div>
-					<div class="text-xs text-slate-400 mt-1">Current rate for new tenancies</div>
+					<div class="text-xs text-slate-400 mt-1">Base rate for mortgages and interest</div>
 				</div>
 				<div class="bg-slate-700 rounded-lg p-4">
 					<div class="text-sm text-slate-400 mb-1">Quarterly Inflation</div>
@@ -202,7 +212,7 @@
 		</div>
 
 		<!-- Navigation Tabs -->
-		<div class="bg-slate-800 rounded-lg p-2 mb-8 border border-slate-700 flex gap-2">
+		<div class="bg-slate-800 rounded-lg p-2 mb-8 border border-slate-700 flex gap-2 flex-wrap">
 			<button
 				onclick={() => switchView('portfolio')}
 				class="flex-1 px-6 py-3 rounded-lg font-semibold transition-colors {currentView === 'portfolio'
@@ -210,6 +220,14 @@
 					: 'bg-slate-700 text-slate-300 hover:bg-slate-600'}"
 			>
 				Portfolio ({$gameState.player.properties.length})
+			</button>
+			<button
+				onclick={() => switchView('balance-sheet')}
+				class="flex-1 px-6 py-3 rounded-lg font-semibold transition-colors {currentView === 'balance-sheet'
+					? 'bg-blue-600 text-white'
+					: 'bg-slate-700 text-slate-300 hover:bg-slate-600'}"
+			>
+				📊 Balance Sheet ({$gameState.balanceSheetHistory.length})
 			</button>
 			<button
 				onclick={() => switchView('mortgages')}
@@ -252,6 +270,8 @@
 			<AuctionView />
 		{:else if currentView === 'portfolio'}
 			<PortfolioView onSelectProperty={handleSelectProperty} />
+		{:else if currentView === 'balance-sheet'}
+			<OverallBalanceSheetView />
 		{:else if currentView === 'mortgages'}
 			<MortgageView />
 		{:else if currentView === 'staff'}
@@ -283,3 +303,18 @@
 		</div>
 	</div>
 </div>
+
+<!-- Balance Sheet Modal -->
+{#if $gameState.gameTime.showBalanceSheetModal}
+	<BalanceSheetModal />
+{/if}
+
+<!-- Game Over Modal -->
+{#if $gameState.gameOver}
+	<GameOverModal gameOver={$gameState.gameOver} />
+{/if}
+
+<!-- Game Win Modal -->
+{#if $gameState.gameWin}
+	<GameWinModal />
+{/if}

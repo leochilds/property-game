@@ -4,10 +4,12 @@
 	import { calculateDaysRemaining, addMonths } from '$lib/utils/date';
 	import { formatCurrency } from '$lib/utils/format';
 	import { BASE_FILL_CHANCE, BASE_SALE_CHANCE, PROPERTIES_PER_LEVEL } from '$lib/types/game';
+	import { calculateBalanceSheet } from '$lib/utils/balanceSheet';
 
 	export let property: Property;
 
 	let selectedSalePrice = 100;
+	let showBalanceSheet = false;
 	
 	$: area = $gameState.areas.find(a => a.name === property.area);
 
@@ -58,17 +60,17 @@
 	}
 
 	function calculateMarketValue(prop: Property): number {
-		return prop.baseValue * (prop.maintenance / 100);
+		return prop.baseValue * (0.5 + prop.maintenance / 200);
 	}
 
 	function calculateMonthlyRent(prop: Property): number {
 		if (!prop.tenancy) {
 			const marketValue = calculateMarketValue(prop);
-			const annualRate = prop.vacantSettings.rentMarkup; // Just the markup, no base rate
+			const annualRate = $gameState.economy.baseRate + prop.vacantSettings.rentMarkup;
 			const annualRent = (marketValue * annualRate) / 100;
 			return annualRent / 12;
 		}
-		const annualRate = prop.tenancy.rentMarkup; // Just the markup, no base rate
+		const annualRate = prop.tenancy.baseRateAtStart + prop.tenancy.rentMarkup;
 		const annualRent = (prop.tenancy.marketValueAtStart * annualRate) / 100;
 		return annualRent / 12;
 	}
@@ -162,6 +164,13 @@
 	$: assignedCaretaker = property.assignedCaretaker
 		? $gameState.staff.caretakers.find(c => c.id === property.assignedCaretaker)
 		: null;
+	
+	// Calculate balance sheet
+	$: mortgage = $gameState.player.mortgages.find(m => m.propertyId === property.id);
+	$: balanceSheet = calculateBalanceSheet(property, mortgage, $gameState.gameTime.currentDate);
+	
+	// Helper for tenancy display (to avoid TypeScript narrowing issues)
+	$: tenancyEndDate = property.tenancy?.endDate;
 </script>
 
 <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
@@ -267,6 +276,166 @@
 				</div>
 			</div>
 		{/if}
+
+		<!-- Balance Sheet -->
+		<div class="mt-4 pt-4 border-t border-slate-600">
+			<button
+				onclick={() => showBalanceSheet = !showBalanceSheet}
+				class="w-full flex items-center justify-between text-sm font-semibold text-slate-400 hover:text-slate-300 transition-colors mb-3"
+			>
+				<span>📊 Balance Sheet</span>
+				<span class="text-xs">{showBalanceSheet ? '▼' : '▶'}</span>
+			</button>
+			
+			{#if showBalanceSheet}
+				{@const diffMarketVsPurchase = balanceSheet.marketValue - balanceSheet.purchasePrice}
+				<div class="bg-slate-600 rounded-lg p-4 space-y-4">
+					<!-- Purchase Details -->
+					<div>
+						<h5 class="text-xs font-semibold text-slate-400 mb-2 uppercase">Purchase</h5>
+						<div class="grid grid-cols-2 gap-2 text-sm">
+							<div>
+								<span class="text-slate-400">Purchase Price:</span>
+								<div class="font-semibold">{formatCurrency(balanceSheet.purchasePrice)}</div>
+							</div>
+							<div>
+								<span class="text-slate-400">Purchase Date:</span>
+								<div class="font-semibold text-xs">{formatDate(balanceSheet.purchaseDate)}</div>
+							</div>
+							<div>
+								<span class="text-slate-400">Potential (Base):</span>
+								<div class="font-semibold">{formatCurrency(balanceSheet.baseValue)}</div>
+							</div>
+							<div>
+								<span class="text-slate-400">Time Owned:</span>
+								<div class="font-semibold">{balanceSheet.daysOwned} days</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Expenses -->
+					<div class="pt-3 border-t border-slate-500">
+						<h5 class="text-xs font-semibold text-slate-400 mb-2 uppercase">Expenses</h5>
+						<div class="grid grid-cols-2 gap-2 text-sm">
+							<div>
+								<span class="text-slate-400">Maintenance:</span>
+								<div class="font-semibold text-red-400">{formatCurrency(balanceSheet.totalMaintenanceCosts)}</div>
+							</div>
+							{#if mortgage}
+								<div>
+									<span class="text-slate-400">Mortgage Interest:</span>
+									<div class="font-semibold text-red-400">{formatCurrency(balanceSheet.totalMortgageInterest)}</div>
+								</div>
+								<div>
+									<span class="text-slate-400">Principal Paid:</span>
+									<div class="font-semibold text-blue-400">{formatCurrency(balanceSheet.totalMortgagePrincipal)}</div>
+								</div>
+							{/if}
+						</div>
+					</div>
+
+					<!-- Income -->
+					<div class="pt-3 border-t border-slate-500">
+						<h5 class="text-xs font-semibold text-slate-400 mb-2 uppercase">Income</h5>
+						<div class="grid grid-cols-2 gap-2 text-sm">
+							<div>
+								<span class="text-slate-400">Total Rental Income:</span>
+								<div class="font-semibold text-green-400">{formatCurrency(balanceSheet.totalRentIncome)}</div>
+							</div>
+							<div>
+								<span class="text-slate-400">Avg Income/Year:</span>
+								<div class="font-semibold text-green-400">
+									{formatCurrency(balanceSheet.daysOwned > 0 ? (balanceSheet.totalRentIncome / balanceSheet.daysOwned) * 365 : 0)}
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Value & Appreciation -->
+					<div class="pt-3 border-t border-slate-500">
+						<h5 class="text-xs font-semibold text-slate-400 mb-2 uppercase">Value & Appreciation</h5>
+						<div class="grid grid-cols-2 gap-2 text-sm">
+							<div>
+								<span class="text-slate-400">Current Market Value:</span>
+								<div class="font-semibold">{formatCurrency(balanceSheet.marketValue)}</div>
+							</div>
+							<div>
+								<span class="text-slate-400">vs Purchase Price:</span>
+								<div class="font-semibold {diffMarketVsPurchase >= 0 ? 'text-green-400' : 'text-red-400'}">
+									{diffMarketVsPurchase >= 0 ? '+' : ''}{formatCurrency(diffMarketVsPurchase)}
+								</div>
+							</div>
+							<div>
+								<span class="text-slate-400">Base Value Change:</span>
+								<div class="font-semibold {balanceSheet.baseValueChange >= 0 ? 'text-green-400' : 'text-red-400'}">
+									{balanceSheet.baseValueChange >= 0 ? '+' : ''}{formatCurrency(balanceSheet.baseValueChange)}
+								</div>
+							</div>
+							<div>
+								<span class="text-slate-400">Avg Appreciation/Year:</span>
+								<div class="font-semibold {balanceSheet.avgAnnualAppreciation >= 0 ? 'text-green-400' : 'text-red-400'}">
+									{balanceSheet.avgAnnualAppreciation >= 0 ? '+' : ''}{formatCurrency(balanceSheet.avgAnnualAppreciation)}
+								</div>
+							</div>
+						</div>
+					</div>
+
+					{#if mortgage}
+						<!-- Mortgage Details -->
+						<div class="pt-3 border-t border-slate-500">
+							<h5 class="text-xs font-semibold text-slate-400 mb-2 uppercase">Mortgage</h5>
+							<div class="grid grid-cols-2 gap-2 text-sm">
+							<div>
+								<span class="text-slate-400">Outstanding:</span>
+								<div class="font-semibold text-red-400">{formatCurrency(mortgage.outstandingBalance)}</div>
+							</div>
+								<div>
+									<span class="text-slate-400">Current Equity:</span>
+									<div class="font-semibold {balanceSheet.currentEquity >= 0 ? 'text-green-400' : 'text-red-400'}">
+										{formatCurrency(balanceSheet.currentEquity)}
+									</div>
+								</div>
+							</div>
+						</div>
+					{/if}
+
+					<!-- Profit Summary -->
+					<div class="pt-3 border-t border-slate-500">
+						<h5 class="text-xs font-semibold text-slate-400 mb-2 uppercase">Profit Summary</h5>
+						<div class="grid grid-cols-2 gap-2 text-sm">
+							<div>
+								<span class="text-slate-400">Net Cash Profit:</span>
+								<div class="font-semibold {balanceSheet.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}">
+									{balanceSheet.netProfit >= 0 ? '+' : ''}{formatCurrency(balanceSheet.netProfit)}
+								</div>
+							</div>
+							<div>
+								<span class="text-slate-400">Avg Profit/Year:</span>
+								<div class="font-semibold {balanceSheet.avgAnnualProfit >= 0 ? 'text-green-400' : 'text-red-400'}">
+									{balanceSheet.avgAnnualProfit >= 0 ? '+' : ''}{formatCurrency(balanceSheet.avgAnnualProfit)}
+								</div>
+							</div>
+							<div class="col-span-2">
+								<span class="text-slate-400">Total Gain (Profit + Value):</span>
+								<div class="text-lg font-bold {balanceSheet.totalGain >= 0 ? 'text-green-400' : 'text-red-400'}">
+									{balanceSheet.totalGain >= 0 ? '+' : ''}{formatCurrency(balanceSheet.totalGain)}
+								</div>
+							</div>
+							<div class="col-span-2">
+								<span class="text-slate-400">Avg Total Gain/Year:</span>
+								<div class="font-semibold {balanceSheet.avgAnnualTotalGain >= 0 ? 'text-green-400' : 'text-red-400'}">
+									{balanceSheet.avgAnnualTotalGain >= 0 ? '+' : ''}{formatCurrency(balanceSheet.avgAnnualTotalGain)}
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="text-xs text-slate-400 pt-2 border-t border-slate-500">
+						💡 Balance sheet shows all income, expenses, and value changes since purchase
+					</div>
+				</div>
+			{/if}
+		</div>
 
 		<!-- Staff Management -->
 		<div class="mt-4 pt-4 border-t border-slate-600">
@@ -487,14 +656,13 @@
 					🏷️ Listed for Sale
 				</h3>
 				{#if property.tenancy}
-					{@const tenancy = property.tenancy}
 					<div class="bg-green-900/30 border border-green-600/50 rounded p-3 mb-4">
 						<div class="text-xs text-green-300 flex items-center gap-2">
 							<span>✨</span>
 							<span>Property with tenant - includes 10% sale chance bonus!</span>
 						</div>
 						<div class="text-xs text-slate-400 mt-1">
-							Monthly rent: {formatCurrency(calculateMonthlyRent(property))} • Lease ends {formatDate(tenancy.endDate)}
+							Monthly rent: {formatCurrency(calculateMonthlyRent(property))} • Lease ends {tenancyEndDate ? formatDate(tenancyEndDate) : 'N/A'}
 						</div>
 					</div>
 				{/if}

@@ -1,10 +1,14 @@
 import { writable } from 'svelte/store';
 import type { GameState, Property, TimeSpeed, GameDate, RentMarkup, TenancyPeriod, Tenancy, MarketProperty, AuctionProperty, PropertyFeatures, PropertyType, Bedrooms, GardenType, ParkingType, AreaName, Area, AreaRating, District, EconomicPhase, Economy, StaffType, EstateAgent, Caretaker, Staff, ExperienceLevel, Mortgage, MortgageType, DepositPercentage, TermLength, FixedPeriod } from '../types/game';
 import { INITIAL_BASE_RATE, MIN_BASE_RATE, TARGET_QUARTERLY_INFLATION, BASE_FILL_CHANCE, BASE_SALE_CHANCE, MAX_MARKET_PROPERTIES, MAX_AUCTION_PROPERTIES, PROPERTY_BASE_VALUE, PROPERTY_TYPE_MULTIPLIERS, BEDROOM_MULTIPLIERS, GARDEN_MULTIPLIERS, PARKING_MULTIPLIERS, CRIME_MULTIPLIERS, SCHOOLS_MULTIPLIERS, TRANSPORT_MULTIPLIERS, ECONOMY_MULTIPLIERS, INITIAL_AREAS, DISTRICT_BASE_SALARIES, EXPERIENCE_THRESHOLDS, PROPERTIES_PER_LEVEL, PROMOTION_BONUS_MULTIPLIER, PROMOTION_WAGE_INCREASE, XP_PER_PROPERTY_PER_DAY, MAX_UNPAID_MONTHS, STAFF_FIRST_NAMES, STAFF_LAST_NAMES, DEPOSIT_RATE_PREMIUMS, BTL_RATE_PREMIUM } from '../types/game';
-import { createDate, addDays, addMonths, isAfterOrEqual, isNewQuarter, calculateDaysRemaining } from '../utils/date';
+import { createDate, addDays, addMonths, isAfterOrEqual, isNewQuarter, calculateDaysRemaining, isUKTaxYearStart } from '../utils/date';
+import { calculateOverallBalanceSheet } from '../utils/balanceSheet';
 
 const STORAGE_KEY = 'property-game-state';
-const GAME_VERSION = 14;
+const GAME_VERSION = 20;
+
+// Foreclosure constants
+const FORECLOSURE_GRACE_PERIOD_DAYS = 30;
 
 // Calculate daily interest rate: (1 + (baseRate - 1%)) ^ (1/365) - 1
 // For 5% base rate: (1 + 0.04) ^ (1/365) - 1 ≈ 0.00010738
@@ -83,7 +87,7 @@ function generatePropertyName(features: PropertyFeatures): string {
 	return `${features.bedrooms}-Bed ${typeNames[features.propertyType]}`;
 }
 
-function createStarterHome(areas: Area[]): Property {
+function createStarterHome(areas: Area[], currentDate: GameDate): Property {
 	const features: PropertyFeatures = {
 		propertyType: 'terraced',
 		bedrooms: 2,
@@ -99,7 +103,10 @@ function createStarterHome(areas: Area[]): Property {
 		id: 'starter-home',
 		name: generatePropertyName(features),
 		baseValue,
-		purchaseBaseValue: baseValue, // Track original value
+		purchaseBaseValue: baseValue,
+		purchasePrice: baseValue,
+		purchaseDate: currentDate,
+		totalMaintenancePaid: 0,
 		features,
 		area,
 		district,
@@ -196,8 +203,10 @@ function createInitialState(): GameState {
 		player: {
 			cash: 50000,
 			accruedInterest: 0,
+			totalInterestEarned: 0,
 			properties: [],
-			mortgages: []
+			mortgages: [],
+			propertySales: []
 		},
 		settings: {
 			defaultRentMarkup: 5.0 // Default 5% rent markup for all new listings
@@ -224,8 +233,23 @@ function createInitialState(): GameState {
 			lastRentCollectionDate: createDate(1, 1, 0), // Start before day 1 so first rent can be collected
 			lastInterestCalculationDate: createDate(1, 1, 0), // Start before day 1
 			speed: 1,
-			isPaused: false
+			isPaused: false,
+			showBalanceSheetModal: false
 		},
+		balanceSheetHistory: [],
+		foreclosureWarning: null,
+		gameOver: null,
+		gameWin: null,
+		trackingStats: {
+			peakNetWorth: 50000,
+			peakNetWorthDate: startDate,
+			peakPropertiesOwned: 0,
+			totalStaffWagesPaid: 0
+		},
+		bankComparisonValue: 50000,
+		prestigeLevel: 0,
+		prestigeBonuses: [],
+		canPrestigeNow: false,
 		version: GAME_VERSION
 	};
 }
@@ -250,7 +274,6 @@ function loadStateFromStorage(): GameState {
 						// Version 3: Added maintenance system
 						maintenance: property.maintenance ?? 100,
 						isUnderMaintenance: property.isUnderMaintenance ?? false,
-						scheduleMaintenance: property.scheduleMaintenance ?? false,
 						maintenanceStartDate: property.maintenanceStartDate ?? null,
 						// Version 5: Added saleInfo
 						saleInfo: property.saleInfo ?? null,
@@ -372,6 +395,9 @@ function loadStateFromStorage(): GameState {
 				if (!(parsed.player as any).accruedInterest) {
 					(parsed.player as any).accruedInterest = 0;
 				}
+				if (!(parsed.player as any).totalInterestEarned) {
+					(parsed.player as any).totalInterestEarned = 0;
+				}
 				if (!(parsed.gameTime as any).lastInterestCalculationDate) {
 					(parsed.gameTime as any).lastInterestCalculationDate = parsed.gameTime.currentDate;
 				}
@@ -482,6 +508,95 @@ function loadStateFromStorage(): GameState {
 					(parsed as any).auctionMarket = [];
 				}
 				
+				// Version 15: Add balance sheet tracking fields
+				parsed.player.properties = parsed.player.properties.map((property: any) => {
+					let updatedProperty = { ...property };
+					
+					// Add purchasePrice if missing (use baseValue as fallback)
+					if (!(updatedProperty as any).purchasePrice) {
+						updatedProperty.purchasePrice = updatedProperty.baseValue;
+					}
+					
+					// Add purchaseDate if missing (use earliest possible date as fallback)
+					if (!(updatedProperty as any).purchaseDate) {
+						updatedProperty.purchaseDate = createDate(1, 1, 1);
+					}
+					
+					// Add totalMaintenancePaid if missing
+					if (!(updatedProperty as any).totalMaintenancePaid) {
+						updatedProperty.totalMaintenancePaid = 0;
+					}
+					
+					return updatedProperty;
+				});
+				
+				// Version 15: Add mortgage payment tracking fields
+				if (parsed.player.mortgages) {
+					parsed.player.mortgages = parsed.player.mortgages.map((mortgage: any) => {
+						let updatedMortgage = { ...mortgage };
+						
+						// Add totalInterestPaid if missing
+						if (!(updatedMortgage as any).totalInterestPaid) {
+							updatedMortgage.totalInterestPaid = 0;
+						}
+						
+						// Add totalPrincipalPaid if missing
+						if (!(updatedMortgage as any).totalPrincipalPaid) {
+							updatedMortgage.totalPrincipalPaid = 0;
+						}
+						
+						return updatedMortgage;
+					});
+				}
+				
+				// Version 16: Add balance sheet history
+				if (!(parsed as any).balanceSheetHistory) {
+					(parsed as any).balanceSheetHistory = [];
+				}
+				
+				// Version 17: Add property sales history
+				if (!(parsed.player as any).propertySales) {
+					(parsed.player as any).propertySales = [];
+				}
+				
+				// Version 19: Replace gameEndState with foreclosure system
+				if ((parsed as any).gameEndState) {
+					delete (parsed as any).gameEndState;
+				}
+				if (!(parsed as any).foreclosureWarning) {
+					(parsed as any).foreclosureWarning = null;
+				}
+				if (!(parsed as any).gameOver) {
+					(parsed as any).gameOver = null;
+				}
+				if (!(parsed as any).trackingStats) {
+					const netWorth = calculateNetWorth(parsed);
+					(parsed as any).trackingStats = {
+						peakNetWorth: Math.max(50000, netWorth),
+						peakNetWorthDate: parsed.gameTime.currentDate,
+						peakPropertiesOwned: parsed.player.properties.length,
+						totalStaffWagesPaid: 0
+					};
+				}
+				
+				// Version 20: Add prestige and win condition system
+				if (!(parsed as any).gameWin) {
+					(parsed as any).gameWin = null;
+				}
+				if (!(parsed as any).bankComparisonValue) {
+					// Start from current cash value
+					(parsed as any).bankComparisonValue = parsed.player.cash;
+				}
+				if (!(parsed as any).prestigeLevel) {
+					(parsed as any).prestigeLevel = 0;
+				}
+				if (!(parsed as any).prestigeBonuses) {
+					(parsed as any).prestigeBonuses = [];
+				}
+				if (!(parsed as any).canPrestigeNow) {
+					(parsed as any).canPrestigeNow = false;
+				}
+				
 				parsed.version = GAME_VERSION;
 				saveStateToStorage(parsed);
 				return parsed;
@@ -519,13 +634,13 @@ function calculateFillChance(rentMarkup: RentMarkup): number {
 }
 
 function calculateMarketValue(property: Property): number {
-	return property.baseValue * (property.maintenance / 100);
+	return property.baseValue * (0.5 + property.maintenance / 200);
 }
 
 function calculateMaintenanceCost(property: Property): number {
 	const percentageNeeded = 100 - property.maintenance;
 	const baseCost = property.baseValue * (percentageNeeded / 100);
-	return baseCost * 0.25;
+	return baseCost * 0.10;
 }
 
 function canBeLetOut(property: Property): boolean {
@@ -753,6 +868,44 @@ function calculateMonthlyMortgageInterest(outstandingBalance: number, annualInte
 	return (outstandingBalance * annualInterestRate / 100) / 12;
 }
 
+// Calculate player's net worth
+function calculateNetWorth(state: GameState): number {
+	// Assets: cash + property market values
+	let assets = state.player.cash + state.player.accruedInterest;
+	
+	state.player.properties.forEach((property) => {
+		assets += calculateMarketValue(property);
+	});
+	
+	// Liabilities: outstanding mortgage balances
+	let liabilities = 0;
+	state.player.mortgages.forEach((mortgage) => {
+		liabilities += mortgage.outstandingBalance;
+	});
+	
+	return assets - liabilities;
+}
+
+// Calculate total equity (property values - mortgages)
+function calculateEquity(state: GameState): number {
+	let propertyValues = 0;
+	state.player.properties.forEach((property) => {
+		propertyValues += calculateMarketValue(property);
+	});
+	
+	let mortgageBalances = 0;
+	state.player.mortgages.forEach((mortgage) => {
+		mortgageBalances += mortgage.outstandingBalance;
+	});
+	
+	return propertyValues - mortgageBalances;
+}
+
+// Calculate cash debt (only negative cash)
+function calculateDebt(state: GameState): number {
+	return state.player.cash < 0 ? Math.abs(state.player.cash) : 0;
+}
+
 function createGameStore() {
 	const { subscribe, set, update } = writable<GameState>(loadStateFromStorage());
 
@@ -775,6 +928,10 @@ function createGameStore() {
 				const dailyInterest = state.player.cash * dailyRate;
 				state.player.accruedInterest += dailyInterest;
 				state.gameTime.lastInterestCalculationDate = newDate;
+				
+				// Calculate daily interest on bank comparison value (tracks what money would be if never invested)
+				const bankDailyInterest = state.bankComparisonValue * dailyRate;
+				state.bankComparisonValue += bankDailyInterest;
 
 				// Staff experience gain (daily) - cap at next level threshold
 				state.staff.estateAgents = state.staff.estateAgents.map(agent => {
@@ -919,6 +1076,7 @@ function createGameStore() {
 							state.player.cash -= cost;
 							return {
 								...property,
+								totalMaintenancePaid: property.totalMaintenancePaid + cost,
 								isUnderMaintenance: true,
 								maintenanceStartDate: newDate
 							};
@@ -930,7 +1088,9 @@ function createGameStore() {
 				// Check if it's the 1st of the month for rent collection, maintenance, interest payout, and area updates
 				if (newDate.day === 1) {
 					// Pay out accrued interest
-					state.player.cash += state.player.accruedInterest;
+					const interestPaid = state.player.accruedInterest;
+					state.player.cash += interestPaid;
+					state.player.totalInterestEarned += interestPaid;
 					state.player.accruedInterest = 0;
 					// Update area ratings monthly
 					state.areas = updateAreaRatings(state.areas);
@@ -978,9 +1138,13 @@ function createGameStore() {
 						
 						state.player.cash -= totalMonthlyPayment;
 						
-						// Reduce outstanding balance (standard only)
+						// Track interest paid
+						updatedMortgage.totalInterestPaid += monthlyInterest;
+						
+						// Reduce outstanding balance and track principal (standard only)
 						if (updatedMortgage.mortgageType === 'standard') {
 							const principalPayment = totalMonthlyPayment - monthlyInterest;
+							updatedMortgage.totalPrincipalPaid += principalPayment;
 							updatedMortgage.outstandingBalance = Math.max(
 								0,
 								updatedMortgage.outstandingBalance - principalPayment
@@ -1013,6 +1177,7 @@ function createGameStore() {
 					if (state.player.cash >= totalWages) {
 						// Can afford to pay everyone
 						state.player.cash -= totalWages;
+						state.trackingStats.totalStaffWagesPaid += totalWages;
 						
 						state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
 							...agent,
@@ -1097,6 +1262,96 @@ function createGameStore() {
 							highestInflationRate: Math.max(caretaker.highestInflationRate, state.economy.inflationRate)
 						}));
 					}
+					
+				}
+				
+				// Capture annual balance sheet snapshot on UK tax year start (April 6th)
+				if (isUKTaxYearStart(newDate)) {
+					const balanceSheet = calculateOverallBalanceSheet(
+						state.player.properties,
+						state.player.mortgages,
+						state.player.cash,
+						newDate,
+						state.staff,
+						state.player.totalInterestEarned,
+						state.player.propertySales
+					);
+					
+					// Add to history and keep only last 50 tax years
+					state.balanceSheetHistory.push(balanceSheet);
+					
+					// Check for 50-year win condition (only if game hasn't ended yet)
+					if (state.balanceSheetHistory.length === 50 && !state.gameWin && !state.gameOver) {
+						// Calculate comprehensive win stats
+						const finalNetWorth = calculateNetWorth(state);
+						
+						// Calculate best property
+						let bestProperty = null;
+						let highestProfit = -Infinity;
+						
+						// Check sold properties
+						state.player.propertySales.forEach(sale => {
+							const profit = sale.salePrice + sale.totalRentIncome - sale.purchasePrice - 
+								sale.totalMaintenancePaid - sale.totalMortgageInterest - sale.totalMortgagePrincipal;
+							if (profit > highestProfit) {
+								highestProfit = profit;
+								bestProperty = { name: sale.name, totalProfit: profit };
+							}
+						});
+						
+						// Check current properties
+						state.player.properties.forEach(property => {
+							const currentValue = calculateMarketValue(property);
+							const mortgage = state.player.mortgages.find(m => m.propertyId === property.id);
+							const profit = currentValue + property.totalIncomeEarned - property.purchasePrice - 
+								property.totalMaintenancePaid - (mortgage?.totalInterestPaid ?? 0);
+							if (profit > highestProfit) {
+								highestProfit = profit;
+								bestProperty = { name: property.name, totalProfit: profit };
+							}
+						});
+						
+						// Trigger game win
+						state.gameWin = {
+							triggeredDate: newDate,
+							finalStats: {
+								gameDuration: {
+									years: newDate.year - 1,
+									months: newDate.month - 1,
+									days: newDate.day - 1
+								},
+								totalPropertiesOwned: state.player.properties.length + state.player.propertySales.length,
+								totalPropertiesSold: state.player.propertySales.length,
+								currentPortfolio: state.player.properties.length,
+								totalRentIncome: state.player.properties.reduce((sum, p) => sum + p.totalIncomeEarned, 0) +
+									state.player.propertySales.reduce((sum, p) => sum + p.totalRentIncome, 0),
+								totalMaintenanceCosts: state.player.properties.reduce((sum, p) => sum + p.totalMaintenancePaid, 0) +
+									state.player.propertySales.reduce((sum, p) => sum + p.totalMaintenancePaid, 0),
+								totalMortgageInterest: state.player.mortgages.reduce((sum, m) => sum + m.totalInterestPaid, 0) +
+									state.player.propertySales.reduce((sum, p) => sum + p.totalMortgageInterest, 0),
+								totalStaffWages: state.trackingStats.totalStaffWagesPaid,
+								finalNetWorth,
+								peakNetWorth: state.trackingStats.peakNetWorth,
+								peakNetWorthDate: state.trackingStats.peakNetWorthDate,
+								peakPropertiesOwned: state.trackingStats.peakPropertiesOwned,
+								bestProperty
+							},
+							bankComparisonValue: state.bankComparisonValue
+						};
+						
+						// Pause game
+						state.gameTime.isPaused = true;
+					}
+					
+					if (state.balanceSheetHistory.length > 50) {
+						state.balanceSheetHistory = state.balanceSheetHistory.slice(-50);
+					}
+					
+					// Pause game and show balance sheet modal (if not showing win modal)
+					if (!state.gameWin) {
+						state.gameTime.isPaused = true;
+						state.gameTime.showBalanceSheetModal = true;
+					}
 				}
 
 				// Check if maintenance is complete (1 month has passed) - runs every day
@@ -1136,17 +1391,72 @@ function createGameStore() {
 				const propertiesToRemove: string[] = [];
 				state.player.properties = state.player.properties.map((property) => {
 					if (property.saleInfo) {
+						// Validate askingPricePercentage is a valid number
+						if (typeof property.saleInfo.askingPricePercentage !== 'number' || 
+						    isNaN(property.saleInfo.askingPricePercentage) || 
+						    property.saleInfo.askingPricePercentage <= 0) {
+							console.error('Invalid askingPricePercentage:', property.saleInfo.askingPricePercentage);
+							// Reset to 100% if invalid
+							return {
+								...property,
+								saleInfo: {
+									...property.saleInfo,
+									askingPricePercentage: 100,
+									daysOnMarket: property.saleInfo.daysOnMarket + 1
+								}
+							};
+						}
+						
 						const marketValue = calculateMarketValue(property);
 						const askingPrice = marketValue * (property.saleInfo.askingPricePercentage / 100);
 						const priceRatio = property.saleInfo.askingPricePercentage / 100;
 						const tenantBonus = property.tenancy ? 1.1 : 1.0; // 10% bonus if occupied
 						const dailySaleChance = BASE_SALE_CHANCE * (1 / Math.pow(priceRatio, 2)) * tenantBonus;
 						
+						// Ensure sale chance is a valid positive number
+						if (isNaN(dailySaleChance) || dailySaleChance <= 0) {
+							console.error('Invalid dailySaleChance:', dailySaleChance, 'for property:', property.name);
+							return {
+								...property,
+								saleInfo: {
+									...property.saleInfo,
+									daysOnMarket: property.saleInfo.daysOnMarket + 1
+								}
+							};
+						}
+						
 						const roll = Math.random() * 100;
 						if (roll < dailySaleChance) {
 							// Property sold!
 							// Check if property has a mortgage and pay it off
 							const mortgage = state.player.mortgages.find((m) => m.propertyId === property.id);
+							
+							// Ensure propertySales array exists (migration safety)
+							if (!state.player.propertySales) {
+								state.player.propertySales = [];
+							}
+							
+							// Record the sale before removing the property
+							const propertySale: import('../types/game').PropertySale = {
+								id: property.id,
+								name: property.name,
+								features: property.features,
+								area: property.area,
+								district: property.district,
+								purchasePrice: property.purchasePrice,
+								purchaseDate: property.purchaseDate,
+								salePrice: askingPrice,
+								saleDate: newDate,
+								totalRentIncome: property.totalIncomeEarned,
+								totalMaintenancePaid: property.totalMaintenancePaid,
+								totalMortgageInterest: mortgage?.totalInterestPaid ?? 0,
+								totalMortgagePrincipal: mortgage?.totalPrincipalPaid ?? 0,
+								hadMortgage: mortgage !== undefined,
+								mortgageBalanceAtSale: mortgage?.outstandingBalance ?? 0
+							};
+							state.player.propertySales.push(propertySale);
+							
+							// Process sale proceeds
 							if (mortgage) {
 								const netProceeds = askingPrice - mortgage.outstandingBalance;
 								state.player.cash += netProceeds;
@@ -1219,6 +1529,76 @@ function createGameStore() {
 				}
 
 				state.gameTime.currentDate = newDate;
+				
+				// Update tracking stats (peak net worth and properties)
+				const currentNetWorth = calculateNetWorth(state);
+				if (currentNetWorth > state.trackingStats.peakNetWorth) {
+					state.trackingStats.peakNetWorth = currentNetWorth;
+					state.trackingStats.peakNetWorthDate = newDate;
+				}
+				if (state.player.properties.length > state.trackingStats.peakPropertiesOwned) {
+					state.trackingStats.peakPropertiesOwned = state.player.properties.length;
+				}
+				
+				// Check foreclosure conditions (only if game hasn't ended)
+				if (!state.gameOver) {
+					const debt = calculateDebt(state);
+					const equity = calculateEquity(state);
+					const inForeclosure = debt > 0 && debt >= 2 * equity;
+					
+					if (inForeclosure && !state.foreclosureWarning) {
+						// Start foreclosure warning
+						state.foreclosureWarning = {
+							isActive: true,
+							daysRemaining: FORECLOSURE_GRACE_PERIOD_DAYS,
+							triggeredDate: newDate,
+							currentDebt: debt,
+							currentEquity: equity
+						};
+						state.gameTime.isPaused = true; // Pause to alert player
+					} else if (inForeclosure && state.foreclosureWarning) {
+						// Update warning and decrement days
+						state.foreclosureWarning.daysRemaining -= 1;
+						state.foreclosureWarning.currentDebt = debt;
+						state.foreclosureWarning.currentEquity = equity;
+						
+						// Check if grace period expired
+						if (state.foreclosureWarning.daysRemaining <= 0) {
+							// Trigger game over - TODO: calculate comprehensive stats
+							state.gameOver = {
+								triggeredDate: newDate,
+								finalStats: {
+									gameDuration: {
+										years: newDate.year - 1,
+										months: newDate.month - 1,
+										days: newDate.day - 1
+									},
+									totalPropertiesOwned: state.player.properties.length + state.player.propertySales.length,
+									totalPropertiesSold: state.player.propertySales.length,
+									currentPortfolio: state.player.properties.length,
+									totalRentIncome: state.player.properties.reduce((sum, p) => sum + p.totalIncomeEarned, 0) +
+										state.player.propertySales.reduce((sum, p) => sum + p.totalRentIncome, 0),
+									totalMaintenanceCosts: state.player.properties.reduce((sum, p) => sum + p.totalMaintenancePaid, 0) +
+										state.player.propertySales.reduce((sum, p) => sum + p.totalMaintenancePaid, 0),
+									totalMortgageInterest: state.player.mortgages.reduce((sum, m) => sum + m.totalInterestPaid, 0) +
+										state.player.propertySales.reduce((sum, p) => sum + p.totalMortgageInterest, 0),
+									totalStaffWages: state.trackingStats.totalStaffWagesPaid,
+									totalDebt: debt,
+									peakNetWorth: state.trackingStats.peakNetWorth,
+									peakNetWorthDate: state.trackingStats.peakNetWorthDate,
+									peakPropertiesOwned: state.trackingStats.peakPropertiesOwned,
+									bestProperty: null // TODO: calculate best property
+								}
+							};
+							state.foreclosureWarning = null;
+							state.gameTime.isPaused = true;
+						}
+					} else if (!inForeclosure && state.foreclosureWarning) {
+						// Condition resolved - cancel warning
+						state.foreclosureWarning = null;
+					}
+				}
+				
 				saveStateToStorage(state);
 				return state;
 			});
@@ -1273,6 +1653,7 @@ function createGameStore() {
 					if (p.id === propertyId) {
 						return {
 							...p,
+							totalMaintenancePaid: p.totalMaintenancePaid + cost,
 							isUnderMaintenance: true,
 							maintenanceStartDate: state.gameTime.currentDate
 						};
@@ -1294,7 +1675,7 @@ function createGameStore() {
 				const marketProperty = state.propertyMarket.find((p) => p.id === marketPropertyId);
 				if (!marketProperty) return state;
 
-				const marketValue = marketProperty.baseValue * (marketProperty.maintenance / 100);
+				const marketValue = marketProperty.baseValue * (0.5 + marketProperty.maintenance / 200);
 				if (state.player.cash < marketValue) {
 					return state; // Not enough cash
 				}
@@ -1304,7 +1685,10 @@ function createGameStore() {
 					id: `property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
 					name: generatePropertyName(marketProperty.features),
 					baseValue: marketProperty.baseValue,
-					purchaseBaseValue: marketProperty.baseValue, // Track purchase value
+					purchaseBaseValue: marketProperty.baseValue,
+					purchasePrice: marketValue,
+					purchaseDate: state.gameTime.currentDate,
+					totalMaintenancePaid: 0,
 					features: marketProperty.features,
 					area: marketProperty.area,
 					district: marketProperty.district,
@@ -1337,7 +1721,7 @@ function createGameStore() {
 				const marketProperty = state.propertyMarket.find((p) => p.id === marketPropertyId);
 				if (!marketProperty) return state;
 
-				const marketValue = marketProperty.baseValue * (marketProperty.maintenance / 100);
+				const marketValue = marketProperty.baseValue * (0.5 + marketProperty.maintenance / 200);
 				const offerAmount = marketValue * (offerPercentage / 100);
 				
 				if (state.player.cash < offerAmount) {
@@ -1361,7 +1745,10 @@ function createGameStore() {
 						id: `property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
 						name: generatePropertyName(marketProperty.features),
 						baseValue: marketProperty.baseValue,
-						purchaseBaseValue: marketProperty.baseValue, // Track purchase value
+						purchaseBaseValue: marketProperty.baseValue,
+						purchasePrice: offerAmount,
+						purchaseDate: state.gameTime.currentDate,
+						totalMaintenancePaid: 0,
 						features: marketProperty.features,
 						area: marketProperty.area,
 						district: marketProperty.district,
@@ -1707,7 +2094,7 @@ function createGameStore() {
 				const marketProperty = state.propertyMarket.find((p) => p.id === marketPropertyId);
 				if (!marketProperty) return state;
 
-				const marketValue = marketProperty.baseValue * (marketProperty.maintenance / 100);
+				const marketValue = marketProperty.baseValue * (0.5 + marketProperty.maintenance / 200);
 				const depositAmount = marketValue * (depositPercentage / 100);
 				const loanAmount = marketValue - depositAmount;
 
@@ -1735,6 +2122,9 @@ function createGameStore() {
 					name: generatePropertyName(marketProperty.features),
 					baseValue: marketProperty.baseValue,
 					purchaseBaseValue: marketProperty.baseValue,
+					purchasePrice: marketValue,
+					purchaseDate: state.gameTime.currentDate,
+					totalMaintenancePaid: 0,
 					features: marketProperty.features,
 					area: marketProperty.area,
 					district: marketProperty.district,
@@ -1769,7 +2159,9 @@ function createGameStore() {
 					fixedPeriodEndDate,
 					interestRate,
 					monthlyPayment,
-					startDate: state.gameTime.currentDate
+					startDate: state.gameTime.currentDate,
+					totalInterestPaid: 0,
+					totalPrincipalPaid: 0
 				};
 
 				state.player.cash -= depositAmount;
@@ -1798,17 +2190,13 @@ function createGameStore() {
 				const currentValue = calculateMarketValue(property);
 				const equity = currentValue - oldMortgage.outstandingBalance;
 
-				if (equity < 0) {
-					return state; // Negative equity - cannot remortgage
+				if (equity <= 0) {
+					return state; // No equity or negative equity - cannot remortgage
 				}
 
-				// Use equity as deposit
-				const depositAmount = currentValue * (depositPercentage / 100);
+				// Use ALL equity as deposit (not a percentage)
+				const depositAmount = equity;
 				const loanAmount = currentValue - depositAmount;
-
-				if (equity < depositAmount) {
-					return state; // Not enough equity for this deposit percentage
-				}
 
 				// Calculate new interest rate and monthly payment
 				const interestRate = calculateMortgageInterestRate(
@@ -1841,7 +2229,9 @@ function createGameStore() {
 					fixedPeriodEndDate,
 					interestRate,
 					monthlyPayment,
-					startDate: state.gameTime.currentDate
+					startDate: state.gameTime.currentDate,
+					totalInterestPaid: 0,
+					totalPrincipalPaid: 0
 				};
 
 				state.player.mortgages.push(newMortgage);
@@ -1871,7 +2261,7 @@ function createGameStore() {
 				const auctionProperty = state.auctionMarket.find((p) => p.id === auctionPropertyId);
 				if (!auctionProperty) return state;
 
-				const marketValue = auctionProperty.baseValue * (auctionProperty.maintenance / 100);
+				const marketValue = auctionProperty.baseValue * (0.5 + auctionProperty.maintenance / 200);
 				if (state.player.cash < marketValue) {
 					return state; // Not enough cash
 				}
@@ -1882,6 +2272,9 @@ function createGameStore() {
 					name: generatePropertyName(auctionProperty.features),
 					baseValue: auctionProperty.baseValue,
 					purchaseBaseValue: auctionProperty.baseValue,
+					purchasePrice: marketValue,
+					purchaseDate: state.gameTime.currentDate,
+					totalMaintenancePaid: 0,
 					features: auctionProperty.features,
 					area: auctionProperty.area,
 					district: auctionProperty.district,
@@ -1914,7 +2307,7 @@ function createGameStore() {
 				const auctionProperty = state.auctionMarket.find((p) => p.id === auctionPropertyId);
 				if (!auctionProperty) return state;
 
-				const marketValue = auctionProperty.baseValue * (auctionProperty.maintenance / 100);
+				const marketValue = auctionProperty.baseValue * (0.5 + auctionProperty.maintenance / 200);
 				const offerAmount = marketValue * (offerPercentage / 100);
 				
 				if (state.player.cash < offerAmount) {
@@ -1933,6 +2326,9 @@ function createGameStore() {
 						name: generatePropertyName(auctionProperty.features),
 						baseValue: auctionProperty.baseValue,
 						purchaseBaseValue: auctionProperty.baseValue,
+						purchasePrice: offerAmount,
+						purchaseDate: state.gameTime.currentDate,
+						totalMaintenancePaid: 0,
 						features: auctionProperty.features,
 						area: auctionProperty.area,
 						district: auctionProperty.district,
@@ -1959,6 +2355,31 @@ function createGameStore() {
 				// Whether accepted or rejected, remove from auction market
 				state.auctionMarket = state.auctionMarket.filter((p) => p.id !== auctionPropertyId);
 
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		dismissBalanceSheetModal: () => {
+			update((state) => {
+				state.gameTime.showBalanceSheetModal = false;
+				state.gameTime.isPaused = false;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		dismissGameWinModal: () => {
+			update((state) => {
+				state.canPrestigeNow = true;
+				state.gameWin = null;
+				state.gameTime.isPaused = false;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		openPrestigeModal: () => {
+			update((state) => {
+				state.canPrestigeNow = true;
+				state.gameWin = null;
 				saveStateToStorage(state);
 				return state;
 			});

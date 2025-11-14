@@ -86,3 +86,8 @@ export function formatDate(date: GameDate): string {
 	];
 	return `${date.day} ${monthNames[date.month - 1]} ${date.year}`;
 }
+
+export function isUKTaxYearStart(date: GameDate): boolean {
+	// UK tax year starts on April 6th
+	return date.month === 4 && date.day === 6;
+}
