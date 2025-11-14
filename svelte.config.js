@@ -9,7 +9,10 @@ const config = {
 	kit: {
 		adapter: adapter({
 			fallback: 'index.html'
-		})
+		}),
+		paths: {
+			base: process.env.NODE_ENV === 'production' ? '/property-game' : ''
+		}
 	}
 };
 

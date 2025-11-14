@@ -16,6 +16,7 @@
 	import PrestigeModal from '$lib/components/PrestigeModal.svelte';
 	import ForeclosureWarningBanner from '$lib/components/ForeclosureWarningBanner.svelte';
 	import DevToolsModal from '$lib/components/DevToolsModal.svelte';
+	import HelpModal from '$lib/components/HelpModal.svelte';
 	import { formatCurrency } from '$lib/utils/format';
 
 	type View = 'market' | 'auction' | 'portfolio' | 'staff' | 'mortgages' | 'balance-sheet' | 'property-detail';
@@ -24,6 +25,7 @@
 	let selectedPropertyId: string | null = null;
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let showDevTools = false;
+	let showHelpModal = false;
 
 	$: selectedProperty = selectedPropertyId 
 		? $gameState.player.properties.find(p => p.id === selectedPropertyId) 
@@ -263,7 +265,7 @@
 				</button>
 			</div>
 			<div class="mt-4 text-sm text-slate-400">
-				<p>Speed multiplier: 1x = 2 seconds per day (use dev tools with Ctrl+Shift+D for custom speeds)</p>
+				<p>Speed multiplier: 1x = 2 seconds per day</p>
 				<p class="mt-1">Default Rent: Target rent markup for all properties when they become vacant (estate agents adjust from this baseline)</p>
 			</div>
 		</div>
@@ -358,8 +360,29 @@
 			<p class="mt-1">Interest on cash is calculated daily at {($gameState.economy.baseRate - 1).toFixed(2)}% APR (base rate minus 1%).</p>
 			<p class="mt-1">Economic conditions update quarterly. Inflation affects property base values permanently.</p>
 		</div>
+
+		<!-- Footer -->
+		<footer class="mt-12 pt-6 border-t border-slate-700 text-center">
+			<div class="bg-slate-800/50 rounded-lg p-4 inline-block">
+				<p class="text-slate-400 text-sm mb-2">
+					<span class="font-semibold text-slate-300">Alpha v0.0.1</span>
+				</p>
+				<p class="text-slate-500 text-xs">
+					⚠️ This is an alpha version. Expect bugs and breaking changes between versions.
+				</p>
+			</div>
+		</footer>
 	</div>
 </div>
+
+<!-- Fixed Help Button -->
+<button
+	onclick={() => showHelpModal = true}
+	class="fixed bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-700 rounded-full shadow-lg flex items-center justify-center text-2xl font-bold transition-all hover:scale-110 z-40"
+	title="Help & Feedback"
+>
+	?
+</button>
 
 <!-- Balance Sheet Modal -->
 {#if $gameState.gameTime.showBalanceSheetModal}
@@ -384,4 +407,9 @@
 <!-- Dev Tools Modal -->
 {#if showDevTools}
 	<DevToolsModal onClose={() => showDevTools = false} />
+{/if}
+
+<!-- Help Modal -->
+{#if showHelpModal}
+	<HelpModal onClose={() => showHelpModal = false} />
 {/if}
