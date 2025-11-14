@@ -226,7 +226,8 @@ function createInitialState(): GameState {
 		},
 		staff: {
 			estateAgents: [],
-			caretakers: []
+			caretakers: [],
+			baseSalaryInflationMultiplier: 1.0
 		},
 		gameTime: {
 			currentDate: startDate,
@@ -453,8 +454,14 @@ function loadStateFromStorage(): GameState {
 				if (!(parsed as any).staff) {
 					(parsed as any).staff = {
 						estateAgents: [],
-						caretakers: []
+						caretakers: [],
+						baseSalaryInflationMultiplier: 1.0
 					};
+				}
+				
+				// Add baseSalaryInflationMultiplier to existing staff objects
+				if (!(parsed.staff as any).baseSalaryInflationMultiplier) {
+					(parsed.staff as any).baseSalaryInflationMultiplier = 1.0;
 				}
 				
 				// Remove autoRelist and scheduleMaintenance, add new staff fields
@@ -778,10 +785,16 @@ function applyInflationToMarket(marketProperties: MarketProperty[], inflationRat
 	}));
 }
 
-function updateEconomyQuarterly(economy: Economy, properties: Property[], marketProperties: MarketProperty[]): {
+function updateEconomyQuarterly(
+	economy: Economy, 
+	properties: Property[], 
+	marketProperties: MarketProperty[], 
+	staff: GameState['staff']
+): {
 	economy: Economy;
 	properties: Property[];
 	marketProperties: MarketProperty[];
+	staff: GameState['staff'];
 } {
 	// Check for phase transition
 	const newPhase = progressEconomicCycle(economy);
@@ -815,6 +828,29 @@ function updateEconomyQuarterly(economy: Economy, properties: Property[], market
 	const updatedProperties = applyInflationToProperties(properties, newInflationRate);
 	const updatedMarket = applyInflationToMarket(marketProperties, newInflationRate);
 	
+	// Apply wage inflation to staff (only if positive inflation, capped at 0.75%)
+	let updatedStaff = { ...staff };
+	if (newInflationRate > 0) {
+		const staffWageInflation = Math.min(newInflationRate, 0.75);
+		const staffMultiplier = 1 + (staffWageInflation / 100);
+		
+		updatedStaff.estateAgents = staff.estateAgents.map(agent => ({
+			...agent,
+			currentSalary: agent.currentSalary * staffMultiplier,
+			highestInflationRate: Math.max(agent.highestInflationRate, newInflationRate)
+		}));
+		
+		updatedStaff.caretakers = staff.caretakers.map(caretaker => ({
+			...caretaker,
+			currentSalary: caretaker.currentSalary * staffMultiplier,
+			highestInflationRate: Math.max(caretaker.highestInflationRate, newInflationRate)
+		}));
+		
+		// Update base salary inflation multiplier (capped at 0.5%)
+		const baseSalaryInflation = Math.min(newInflationRate, 0.5);
+		updatedStaff.baseSalaryInflationMultiplier = staff.baseSalaryInflationMultiplier * (1 + baseSalaryInflation / 100);
+	}
+	
 	return {
 		economy: {
 			...economy,
@@ -827,7 +863,8 @@ function updateEconomyQuarterly(economy: Economy, properties: Property[], market
 			targetBaseRate: targetBaseRate
 		},
 		properties: updatedProperties,
-		marketProperties: updatedMarket
+		marketProperties: updatedMarket,
+		staff: updatedStaff
 	};
 }
 
@@ -917,10 +954,11 @@ function createGameStore() {
 
 				// Check for quarterly economic update
 				if (isNewQuarter(state.economy.lastQuarterDate, newDate)) {
-					const result = updateEconomyQuarterly(state.economy, state.player.properties, state.propertyMarket);
+					const result = updateEconomyQuarterly(state.economy, state.player.properties, state.propertyMarket, state.staff);
 					state.economy = { ...result.economy, lastQuarterDate: newDate };
 					state.player.properties = result.properties;
 					state.propertyMarket = result.marketProperties;
+					state.staff = result.staff;
 				}
 
 				// Calculate daily interest on cash
@@ -1246,22 +1284,6 @@ function createGameStore() {
 						}
 					});
 
-					// Apply inflation to staff wages (only if positive inflation)
-					if (state.economy.inflationRate > 0) {
-						const inflationMultiplier = 1 + (state.economy.inflationRate / 100);
-						
-						state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
-							...agent,
-							currentSalary: agent.currentSalary * inflationMultiplier,
-							highestInflationRate: Math.max(agent.highestInflationRate, state.economy.inflationRate)
-						}));
-						
-						state.staff.caretakers = state.staff.caretakers.map(caretaker => ({
-							...caretaker,
-							currentSalary: caretaker.currentSalary * inflationMultiplier,
-							highestInflationRate: Math.max(caretaker.highestInflationRate, state.economy.inflationRate)
-						}));
-					}
 					
 				}
 				
@@ -1826,13 +1848,16 @@ function createGameStore() {
 				const name = generateStaffName();
 				const baseSalary = DISTRICT_BASE_SALARIES[district];
 				
+				// Apply the accumulated base salary inflation multiplier to new hires
+				const adjustedBaseSalary = baseSalary * state.staff.baseSalaryInflationMultiplier;
+				
 				const baseStaff = {
 					id,
 					name,
 					type,
 					district,
 					baseSalary,
-					currentSalary: baseSalary,
+					currentSalary: adjustedBaseSalary,
 					highestInflationRate: state.economy.inflationRate,
 					experienceLevel: 1 as ExperienceLevel,
 					experiencePoints: 0,
@@ -2380,6 +2405,328 @@ function createGameStore() {
 			update((state) => {
 				state.canPrestigeNow = true;
 				state.gameWin = null;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		prestigeReset: (bonuses: Array<{ type: import('../types/game').PrestigeBonusType; points: number }>) => {
+			update((state) => {
+				// Increment prestige level by total points
+				const totalPoints = bonuses.reduce((sum, b) => sum + b.points, 0);
+				const newPrestigeLevel = state.prestigeLevel + totalPoints;
+				
+				// Store bonuses
+				const newBonuses = [...state.prestigeBonuses, ...bonuses];
+				
+				// Calculate new starting values
+				let newStartingCash = 50000;
+				let startingProperties: Property[] = [];
+				
+				// Apply cash bonuses
+				const totalCashPoints = newBonuses.filter(b => b.type === 'cash').reduce((sum, b) => sum + b.points, 0);
+				if (totalCashPoints > 0) {
+					const doublingPoints = Math.ceil(Math.log2(1000000 / 50000));
+					if (totalCashPoints <= doublingPoints) {
+						newStartingCash = 50000 * Math.pow(2, totalCashPoints);
+					} else {
+						newStartingCash = 1000000 + (totalCashPoints - doublingPoints) * 1000000;
+					}
+				}
+				
+				// Apply property bonuses
+				const totalPropertyPoints = newBonuses.filter(b => b.type === 'property').reduce((sum, b) => sum + b.points, 0);
+				if (totalPropertyPoints > 0) {
+					const mainDistrict = ((totalPropertyPoints - 1) % 10) + 1 as import('../types/game').District;
+					const extraProperties = Math.floor((totalPropertyPoints - 1) / 10);
+					
+					// Create main property with correct district modifier
+					const mainProperty = createStarterHome(state.areas, createDate(1, 1, 1));
+					const mainDistrictModifier = Math.pow(mainDistrict, 3);
+					const mainAreaRatings = getAreaRatings(mainProperty.area, state.areas);
+					const mainBaseValue = calculateBaseValueFromFeatures(mainProperty.features, mainAreaRatings, mainDistrictModifier);
+					
+					startingProperties.push({
+						...mainProperty,
+						district: mainDistrict,
+						districtModifier: mainDistrictModifier,
+						baseValue: mainBaseValue,
+						purchaseBaseValue: mainBaseValue,
+						purchasePrice: mainBaseValue,
+						id: `prestige-property-main`
+					});
+					
+					// Create bonus properties (district 10) with correct district modifier
+					for (let i = 0; i < extraProperties; i++) {
+						const bonusProperty = createStarterHome(state.areas, createDate(1, 1, 1));
+						const bonusDistrictModifier = Math.pow(10, 3); // 1000
+						const bonusAreaRatings = getAreaRatings(bonusProperty.area, state.areas);
+						const bonusBaseValue = calculateBaseValueFromFeatures(bonusProperty.features, bonusAreaRatings, bonusDistrictModifier);
+						
+						startingProperties.push({
+							...bonusProperty,
+							district: 10 as import('../types/game').District,
+							districtModifier: bonusDistrictModifier,
+							baseValue: bonusBaseValue,
+							purchaseBaseValue: bonusBaseValue,
+							purchasePrice: bonusBaseValue,
+							id: `prestige-property-bonus-${i}`
+						});
+					}
+				}
+				
+				// Create new initial state with prestige bonuses
+				const newState = createInitialState();
+				newState.player.cash = newStartingCash;
+				newState.player.properties = startingProperties;
+				newState.prestigeLevel = newPrestigeLevel;
+				newState.prestigeBonuses = newBonuses;
+				newState.bankComparisonValue = newStartingCash;
+				newState.canPrestigeNow = false;
+				
+				set(newState);
+				saveStateToStorage(newState);
+				return newState;
+			});
+		},
+		cancelPrestige: () => {
+			update((state) => {
+				state.canPrestigeNow = false;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		
+		// Development Tools Actions
+		devSetCash: (amount: number) => {
+			update((state) => {
+				state.player.cash = amount;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devAddCash: (amount: number) => {
+			update((state) => {
+				state.player.cash += amount;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devSetDate: (year: number, month: number, day: number) => {
+			update((state) => {
+				state.gameTime.currentDate = createDate(day, month, year);
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devAdvanceTime: (days: number) => {
+			update((state) => {
+				for (let i = 0; i < days; i++) {
+					state.gameTime.currentDate = addDays(state.gameTime.currentDate, 1);
+				}
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devSetEconomy: (baseRate?: number, inflationRate?: number, phase?: EconomicPhase) => {
+			update((state) => {
+				if (baseRate !== undefined) {
+					state.economy.baseRate = Math.max(MIN_BASE_RATE, baseRate);
+				}
+				if (inflationRate !== undefined) {
+					state.economy.inflationRate = inflationRate;
+				}
+				if (phase !== undefined) {
+					state.economy.economicPhase = phase;
+					state.economy.quartersSincePhaseChange = 0;
+				}
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devForceQuarterlyUpdate: () => {
+			update((state) => {
+				const result = updateEconomyQuarterly(state.economy, state.player.properties, state.propertyMarket, state.staff);
+				state.economy = { ...result.economy, lastQuarterDate: state.gameTime.currentDate };
+				state.player.properties = result.properties;
+				state.propertyMarket = result.marketProperties;
+				state.staff = result.staff;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devAddProperty: (area: AreaName, district: District, maintenance: number) => {
+			update((state) => {
+				const features = generateRandomFeatures();
+				const areaRatings = getAreaRatings(area, state.areas);
+				const districtModifier = Math.pow(district, 3);
+				const baseValue = calculateBaseValueFromFeatures(features, areaRatings, districtModifier);
+				
+				const newProperty: Property = {
+					id: `dev-property-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+					name: generatePropertyName(features),
+					baseValue,
+					purchaseBaseValue: baseValue,
+					purchasePrice: baseValue,
+					purchaseDate: state.gameTime.currentDate,
+					totalMaintenancePaid: 0,
+					features,
+					area,
+					district,
+					districtModifier,
+					totalIncomeEarned: 0,
+					tenancy: null,
+					vacantSettings: {
+						rentMarkup: state.settings.defaultRentMarkup,
+						periodMonths: 12
+					},
+					maintenance,
+					isUnderMaintenance: false,
+					maintenanceStartDate: null,
+					saleInfo: null,
+					assignedEstateAgent: null,
+					assignedCaretaker: null,
+					listedDate: null
+				};
+				
+				state.player.properties.push(newProperty);
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devSetAllMaintenance: (maintenance: number) => {
+			update((state) => {
+				state.player.properties = state.player.properties.map(p => ({
+					...p,
+					maintenance,
+					isUnderMaintenance: false,
+					maintenanceStartDate: null
+				}));
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devFillAllProperties: () => {
+			update((state) => {
+				state.player.properties = state.player.properties.map(property => {
+					if (!property.tenancy && canBeLetOut(property)) {
+						const marketValue = calculateMarketValue(property);
+						const endDate = addMonths(state.gameTime.currentDate, property.vacantSettings.periodMonths);
+						return {
+							...property,
+							tenancy: {
+								rentMarkup: property.vacantSettings.rentMarkup,
+								periodMonths: property.vacantSettings.periodMonths,
+								startDate: state.gameTime.currentDate,
+								endDate: endDate,
+								marketValueAtStart: marketValue,
+								baseRateAtStart: state.economy.baseRate
+							}
+						};
+					}
+					return property;
+				});
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devClearAllTenancies: () => {
+			update((state) => {
+				state.player.properties = state.player.properties.map(p => ({
+					...p,
+					tenancy: null,
+					listedDate: null
+				}));
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devGenerateMarketProperties: (count: number) => {
+			update((state) => {
+				const newProperties = Array.from({ length: count }, () => 
+					generateMarketProperty(state.areas, state.gameTime.currentDate)
+				);
+				state.propertyMarket = [...state.propertyMarket, ...newProperties].slice(0, MAX_MARKET_PROPERTIES);
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devGenerateAuctionProperties: (count: number) => {
+			update((state) => {
+				const newProperties = Array.from({ length: count }, () => 
+					generateAuctionProperty(state.areas, state.gameTime.currentDate)
+				);
+				state.auctionMarket = [...state.auctionMarket, ...newProperties].slice(0, MAX_AUCTION_PROPERTIES);
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devMaxAllStaffXP: () => {
+			update((state) => {
+				state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
+					...agent,
+					experienceLevel: 6 as ExperienceLevel,
+					experiencePoints: EXPERIENCE_THRESHOLDS[6]
+				}));
+				state.staff.caretakers = state.staff.caretakers.map(caretaker => ({
+					...caretaker,
+					experienceLevel: 6 as ExperienceLevel,
+					experiencePoints: EXPERIENCE_THRESHOLDS[6]
+				}));
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devPayAllWages: () => {
+			update((state) => {
+				state.staff.estateAgents = state.staff.estateAgents.map(agent => ({
+					...agent,
+					unpaidWages: 0,
+					monthsUnpaid: 0
+				}));
+				state.staff.caretakers = state.staff.caretakers.map(caretaker => ({
+					...caretaker,
+					unpaidWages: 0,
+					monthsUnpaid: 0
+				}));
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devClearAllMortgages: () => {
+			update((state) => {
+				state.player.mortgages = [];
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devClearForeclosureWarning: () => {
+			update((state) => {
+				state.foreclosureWarning = null;
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devSetAreaRatings: (areaName: AreaName, ratings: Partial<Area['ratings']>) => {
+			update((state) => {
+				state.areas = state.areas.map(area => {
+					if (area.name === areaName) {
+						return {
+							...area,
+							ratings: {
+								...area.ratings,
+								...ratings
+							}
+						};
+					}
+					return area;
+				});
+				saveStateToStorage(state);
+				return state;
+			});
+		},
+		devSetSpeed: (speed: number) => {
+			update((state) => {
+				state.gameTime.speed = speed as TimeSpeed;
 				saveStateToStorage(state);
 				return state;
 			});

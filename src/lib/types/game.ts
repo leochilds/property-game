@@ -280,7 +280,7 @@ export type PrestigeBonusType = 'cash' | 'property';
 
 export interface PrestigeBonus {
 	type: PrestigeBonusType;
-	level: number;
+	points: number; // How many points allocated to this bonus type
 }
 
 export interface GameState {
@@ -302,6 +302,7 @@ export interface GameState {
 	staff: {
 		estateAgents: EstateAgent[];
 		caretakers: Caretaker[];
+		baseSalaryInflationMultiplier: number; // Tracks cumulative inflation for new hire salaries (capped at 0.5% per quarter)
 	};
 	gameTime: {
 		currentDate: GameDate;

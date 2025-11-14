@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { browser } from '$app/environment';
 	import { gameState } from '$lib/stores/gameState';
 	import { TIME_SPEED_MS, type TimeSpeed } from '$lib/types/game';
 	import MarketView from '$lib/components/MarketView.svelte';
@@ -12,7 +13,9 @@
 	import BalanceSheetModal from '$lib/components/BalanceSheetModal.svelte';
 	import GameOverModal from '$lib/components/GameOverModal.svelte';
 	import GameWinModal from '$lib/components/GameWinModal.svelte';
+	import PrestigeModal from '$lib/components/PrestigeModal.svelte';
 	import ForeclosureWarningBanner from '$lib/components/ForeclosureWarningBanner.svelte';
+	import DevToolsModal from '$lib/components/DevToolsModal.svelte';
 	import { formatCurrency } from '$lib/utils/format';
 
 	type View = 'market' | 'auction' | 'portfolio' | 'staff' | 'mortgages' | 'balance-sheet' | 'property-detail';
@@ -20,16 +23,32 @@
 	let currentView: View = 'portfolio';
 	let selectedPropertyId: string | null = null;
 	let timer: ReturnType<typeof setInterval> | null = null;
+	let showDevTools = false;
 
 	$: selectedProperty = selectedPropertyId 
 		? $gameState.player.properties.find(p => p.id === selectedPropertyId) 
 		: null;
 
+	// Restart timer when speed changes
+	$: if (timer !== null) {
+		startTimer();
+	}
+	
+	// Also watch for speed changes directly
+	$: $gameState.gameTime.speed, restartTimerIfNeeded();
+	
+	function restartTimerIfNeeded() {
+		if (timer !== null && !$gameState.gameTime.isPaused) {
+			startTimer();
+		}
+	}
+
 	function startTimer() {
 		if (timer) clearInterval(timer);
 
 		const speed = $gameState.gameTime.speed;
-		const interval = TIME_SPEED_MS[speed];
+		// Calculate interval dynamically: base 2000ms (1x speed) divided by speed multiplier
+		const interval = 2000 / speed;
 
 		timer = setInterval(() => {
 			if (!$gameState.gameTime.isPaused) {
@@ -72,12 +91,26 @@
 		}
 	}
 
+	function handleKeyDown(event: KeyboardEvent) {
+		// Ctrl+Shift+D or Cmd+Shift+D to toggle dev tools
+		if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'D') {
+			event.preventDefault();
+			showDevTools = !showDevTools;
+		}
+	}
+
 	onMount(() => {
 		startTimer();
+		if (browser) {
+			window.addEventListener('keydown', handleKeyDown);
+		}
 	});
 
 	onDestroy(() => {
 		if (timer) clearInterval(timer);
+		if (browser) {
+			window.removeEventListener('keydown', handleKeyDown);
+		}
 	});
 </script>
 
@@ -90,7 +123,22 @@
 	<div class="max-w-6xl mx-auto">
 		<!-- Header -->
 		<header class="mb-8">
-			<h1 class="text-4xl font-bold mb-2">Property Management Game</h1>
+			<div class="flex items-start justify-between mb-2">
+				<h1 class="text-4xl font-bold">Property Management Game</h1>
+				
+				<!-- Prestige Level Indicator -->
+				{#if $gameState.prestigeLevel > 0}
+					<div class="bg-gradient-to-br from-purple-600 to-purple-800 rounded-lg px-4 py-2 border-2 border-purple-400 shadow-lg">
+						<div class="flex items-center gap-2">
+							<span class="text-2xl">✨</span>
+							<div>
+								<div class="text-xs text-purple-200 uppercase tracking-wide font-semibold">Prestige</div>
+								<div class="text-2xl font-bold text-white leading-tight">Level {$gameState.prestigeLevel}</div>
+							</div>
+						</div>
+					</div>
+				{/if}
+			</div>
 			<div class="flex items-center gap-6 text-lg flex-wrap">
 				<div>
 					<span class="text-slate-400">Date:</span>
@@ -198,15 +246,24 @@
 					<span class="text-slate-400">%</span>
 				</div>
 
+				{#if $gameState.canPrestigeNow}
+					<button
+						onclick={() => gameState.openPrestigeModal()}
+						class="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg font-semibold transition-colors ml-auto"
+					>
+						✨ Prestige Now
+					</button>
+				{/if}
+				
 				<button
 					onclick={handleReset}
-					class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold transition-colors ml-auto"
+					class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold transition-colors {$gameState.canPrestigeNow ? '' : 'ml-auto'}"
 				>
 					Reset Game
 				</button>
 			</div>
 			<div class="mt-4 text-sm text-slate-400">
-				<p>0.5x = 10 seconds per day | 1x = 2 seconds per day | 5x = 0.5 seconds per day</p>
+				<p>Speed multiplier: 1x = 2 seconds per day (use dev tools with Ctrl+Shift+D for custom speeds)</p>
 				<p class="mt-1">Default Rent: Target rent markup for all properties when they become vacant (estate agents adjust from this baseline)</p>
 			</div>
 		</div>
@@ -317,4 +374,14 @@
 <!-- Game Win Modal -->
 {#if $gameState.gameWin}
 	<GameWinModal />
+{/if}
+
+<!-- Prestige Modal -->
+{#if $gameState.canPrestigeNow}
+	<PrestigeModal />
+{/if}
+
+<!-- Dev Tools Modal -->
+{#if showDevTools}
+	<DevToolsModal onClose={() => showDevTools = false} />
 {/if}
