@@ -93,6 +93,14 @@
 				{@const canPayOff = $gameState.player.cash >= mortgage.outstandingBalance}
 				
 				<div class="bg-slate-700 rounded-lg p-4 border-2 {mortgage.mortgageType === 'btl' ? 'border-amber-600' : 'border-blue-600'}">
+					{#if !mortgage.propertyId}
+						<div class="mb-3 text-sm bg-orange-900/30 border border-orange-600 rounded p-3">
+							<div class="font-bold text-orange-400 mb-1">⚠️ Orphaned Mortgage</div>
+							<div class="text-xs text-orange-200">
+								Property was sold but proceeds did not cover the full mortgage. This debt must still be paid monthly.
+							</div>
+						</div>
+					{/if}
 					<div class="flex justify-between items-start mb-3">
 						<div>
 							<h3 class="text-lg font-bold">{mortgage.propertyName || 'Unknown Property'}</h3>
@@ -100,6 +108,11 @@
 								<span class="px-2 py-0.5 rounded text-xs font-semibold {mortgage.mortgageType === 'btl' ? 'bg-amber-600' : 'bg-blue-600'}">
 									{mortgage.mortgageType === 'btl' ? 'BTL (Interest Only)' : 'Standard'}
 								</span>
+								{#if !mortgage.propertyId}
+									<span class="px-2 py-0.5 rounded text-xs font-semibold bg-orange-600">
+										Property Sold
+									</span>
+								{/if}
 								{#if onVariableRate}
 									<span class="px-2 py-0.5 rounded text-xs font-semibold bg-yellow-600">
 										Variable Rate
