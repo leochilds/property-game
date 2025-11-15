@@ -5,7 +5,7 @@ import { createDate, addDays, addMonths, isAfterOrEqual, isNewQuarter, calculate
 import { calculateOverallBalanceSheet } from '../utils/balanceSheet';
 
 const STORAGE_KEY = 'property-game-state';
-const GAME_VERSION = 20;
+const GAME_VERSION = 21;
 
 // Foreclosure constants
 const FORECLOSURE_GRACE_PERIOD_DAYS = 30;
