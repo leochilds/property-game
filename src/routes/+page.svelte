@@ -365,7 +365,7 @@
 		<footer class="mt-12 pt-6 border-t border-slate-700 text-center">
 			<div class="bg-slate-800/50 rounded-lg p-4 inline-block">
 				<p class="text-slate-400 text-sm mb-2">
-					<span class="font-semibold text-slate-300">Alpha v0.0.1</span>
+					<span class="font-semibold text-slate-300">{import.meta.env.VITE_APP_VERSION}</span>
 				</p>
 				<p class="text-slate-500 text-xs">
 					⚠️ This is an alpha version. Expect bugs and breaking changes between versions.

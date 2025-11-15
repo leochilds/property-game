@@ -1,0 +1,63 @@
+name: Version Bump
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Calculate Next Version
+        id: version
+        run: |
+          # Read current version
+          CURRENT_VERSION=$(cat version.json | grep -o '"version": "[^"]*"' | cut -d'"' -f4)
+          STAGE=$(cat version.json | grep -o '"stage": "[^"]*"' | cut -d'"' -f4)
+          
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Get current date components
+          CURRENT_YEAR=$(date +%Y)
+          CURRENT_MONTH=$(date +%m)
+          
+          # Parse current version (YYYY.MM.BB format)
+          IFS='.' read -r VERSION_YEAR VERSION_MONTH VERSION_BUILD <<< "$CURRENT_VERSION"
+          
+          # Calculate next version
+          if [ "$CURRENT_YEAR" = "$VERSION_YEAR" ] && [ "$CURRENT_MONTH" = "$VERSION_MONTH" ]; then
+            # Same month, increment build number
+            NEW_BUILD=$((10#$VERSION_BUILD + 1))
+            NEW_VERSION="${CURRENT_YEAR}.${CURRENT_MONTH}.$(printf "%02d" $NEW_BUILD)"
+          else
+            # New month, reset build number to 01
+            NEW_VERSION="${CURRENT_YEAR}.${CURRENT_MONTH}.01"
+          fi
+          
+          echo "New version: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+
+      - name: Update version.json
+        run: |
+          cat > version.json << EOF
+          {
+            "version": "${{ steps.version.outputs.new_version }}",
+            "stage": "${{ steps.version.outputs.stage }}"
+          }
+          EOF
+          
+          cat version.json
+
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "Bump version to ${{ steps.version.outputs.stage }} ${{ steps.version.outputs.new_version }}"
+          git push

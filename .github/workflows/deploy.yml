@@ -30,9 +30,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Read Version
+        id: version
+        run: |
+          VERSION=$(cat version.json | grep -o '"version": "[^"]*"' | cut -d'"' -f4)
+          STAGE=$(cat version.json | grep -o '"stage": "[^"]*"' | cut -d'"' -f4)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+          echo "Building with version: $STAGE v$VERSION"
+
       - name: Build
         env:
           NODE_ENV: production
+          VITE_APP_VERSION: ${{ steps.version.outputs.stage }} v${{ steps.version.outputs.version }}
         run: npm run build
 
       - name: Setup Pages
