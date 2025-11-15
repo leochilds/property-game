@@ -1478,15 +1478,26 @@ function createGameStore() {
 							};
 							state.player.propertySales.push(propertySale);
 							
-							// Process sale proceeds
+							// Process sale proceeds and mortgage settlement
 							if (mortgage) {
-								const netProceeds = askingPrice - mortgage.outstandingBalance;
-								state.player.cash += netProceeds;
-								// Mark mortgage propertyId as null (debt remains if underwater)
-								state.player.mortgages = state.player.mortgages.map((m) => 
-									m.id === mortgage.id ? { ...m, propertyId: null } : m
-								);
+								if (askingPrice >= mortgage.outstandingBalance) {
+									// Scenario A: Sale covers mortgage - pay it off
+									const netProceeds = askingPrice - mortgage.outstandingBalance;
+									state.player.cash += netProceeds;
+									// Set balance to 0 so cleanup logic removes it
+									state.player.mortgages = state.player.mortgages.map((m) => 
+										m.id === mortgage.id ? { ...m, outstandingBalance: 0, propertyId: null } : m
+									);
+								} else {
+									// Scenario B: Underwater - player gets all proceeds, mortgage remains orphaned
+									state.player.cash += askingPrice;
+									// Keep full mortgage balance, just orphan it
+									state.player.mortgages = state.player.mortgages.map((m) => 
+										m.id === mortgage.id ? { ...m, propertyId: null } : m
+									);
+								}
 							} else {
+								// No mortgage - player gets full sale price
 								state.player.cash += askingPrice;
 							}
 							propertiesToRemove.push(property.id);

@@ -575,6 +575,7 @@
 				{@const priceRatio = selectedSalePrice / 100}
 				{@const tenantBonus = 1.1}
 				{@const dailyChance = BASE_SALE_CHANCE * (1 / Math.pow(priceRatio, 2)) * tenantBonus}
+				{@const propertyMortgage = $gameState.player.mortgages.find(m => m.propertyId === property.id)}
 				<div class="bg-slate-700 rounded-lg p-4">
 					<h4 class="font-bold mb-3">List for Sale</h4>
 					<div class="bg-blue-900/30 border border-blue-600/50 rounded p-3 mb-3">
@@ -607,6 +608,16 @@
 							<span class="text-green-400 ml-1">(+10% tenant bonus)</span>
 						</div>
 					</div>
+					{#if propertyMortgage && askingPrice < propertyMortgage.outstandingBalance}
+						{@const shortfall = propertyMortgage.outstandingBalance - askingPrice}
+						<div class="mb-3 text-sm bg-orange-900/30 border border-orange-600 rounded p-3">
+							<div class="font-bold text-orange-400 mb-1">⚠️ Underwater Mortgage Warning</div>
+							<div class="text-xs text-orange-200">
+								Sale price ({formatCurrency(askingPrice)}) will not cover mortgage ({formatCurrency(propertyMortgage.outstandingBalance)}).
+								You will receive all sale proceeds, but the mortgage debt of {formatCurrency(propertyMortgage.outstandingBalance)} will remain.
+							</div>
+						</div>
+					{/if}
 					<button
 						onclick={handleListForSale}
 						class="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg font-semibold transition-colors"
@@ -837,6 +848,7 @@
 				{@const askingPrice = marketValue * (selectedSalePrice / 100)}
 				{@const priceRatio = selectedSalePrice / 100}
 				{@const dailyChance = BASE_SALE_CHANCE * (1 / Math.pow(priceRatio, 2))}
+				{@const propertyMortgage = $gameState.player.mortgages.find(m => m.propertyId === property.id)}
 				<div class="bg-slate-700 rounded-lg p-4">
 					<h4 class="font-bold mb-3">List for Sale</h4>
 					<div class="text-xs text-slate-400 mb-3">
@@ -862,6 +874,16 @@
 							Daily Sale Chance: <span class="font-semibold text-yellow-400">{dailyChance.toFixed(2)}%</span>
 						</div>
 					</div>
+					{#if propertyMortgage && askingPrice < propertyMortgage.outstandingBalance}
+						{@const shortfall = propertyMortgage.outstandingBalance - askingPrice}
+						<div class="mb-3 text-sm bg-orange-900/30 border border-orange-600 rounded p-3">
+							<div class="font-bold text-orange-400 mb-1">⚠️ Underwater Mortgage Warning</div>
+							<div class="text-xs text-orange-200">
+								Sale price ({formatCurrency(askingPrice)}) will not cover mortgage ({formatCurrency(propertyMortgage.outstandingBalance)}).
+								You will receive all sale proceeds, but the mortgage debt of {formatCurrency(propertyMortgage.outstandingBalance)} will remain.
+							</div>
+						</div>
+					{/if}
 					<button
 						onclick={handleListForSale}
 						class="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg font-semibold transition-colors"
