@@ -1192,7 +1192,7 @@ function createGameStore() {
 						return updatedMortgage;
 					});
 					
-					// Remove fully paid off mortgages
+					// Remove fully paid off mortgages (monthly cleanup)
 					state.player.mortgages = state.player.mortgages.filter(
 						(m) => m.outstandingBalance > 0.01
 					);
@@ -1519,6 +1519,11 @@ function createGameStore() {
 				// Remove sold properties
 				state.player.properties = state.player.properties.filter(
 					(p) => !propertiesToRemove.includes(p.id)
+				);
+				
+				// Remove fully paid off mortgages immediately (don't wait for monthly cleanup)
+				state.player.mortgages = state.player.mortgages.filter(
+					(m) => m.outstandingBalance > 0.01
 				);
 
 				// Increment daysOnMarket for all market properties
