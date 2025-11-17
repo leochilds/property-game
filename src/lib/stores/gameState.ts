@@ -879,10 +879,17 @@ function calculateMortgageInterestRate(
 	return baseRate + depositPremium + btlPremium;
 }
 
+function calculateRemainingMonths(startDate: GameDate, termYears: number, currentDate: GameDate): number {
+	const totalMonths = termYears * 12;
+	const monthsElapsed = (currentDate.year - startDate.year) * 12 + 
+						 (currentDate.month - startDate.month);
+	return Math.max(1, totalMonths - monthsElapsed); // Minimum 1 month
+}
+
 function calculateMonthlyMortgagePayment(
 	loanAmount: number,
 	annualInterestRate: number,
-	termYears: TermLength,
+	termMonths: number,
 	mortgageType: MortgageType
 ): number {
 	if (mortgageType === 'btl') {
@@ -892,7 +899,7 @@ function calculateMonthlyMortgagePayment(
 	
 	// Standard mortgage: Calculate amortization payment
 	const monthlyRate = annualInterestRate / 100 / 12;
-	const numPayments = termYears * 12;
+	const numPayments = termMonths;
 	
 	// M = P * [r(1+r)^n] / [(1+r)^n - 1]
 	const payment = loanAmount * (monthlyRate * Math.pow(1 + monthlyRate, numPayments)) / 
@@ -1009,10 +1016,17 @@ function createGameStore() {
 						
 						// Only update if rate has changed
 						if (newRate !== mortgage.interestRate) {
+							// Calculate remaining months from start date
+							const remainingMonths = calculateRemainingMonths(
+								mortgage.startDate,
+								mortgage.termLengthYears,
+								newDate
+							);
+							
 							const newMonthlyPayment = calculateMonthlyMortgagePayment(
 								mortgage.outstandingBalance,
 								newRate,
-								mortgage.termLengthYears,
+								remainingMonths,
 								mortgage.mortgageType
 							);
 							
@@ -2152,7 +2166,7 @@ function createGameStore() {
 				const monthlyPayment = calculateMonthlyMortgagePayment(
 					loanAmount,
 					interestRate,
-					termLength,
+					termLength * 12,
 					mortgageType
 				);
 
@@ -2248,7 +2262,7 @@ function createGameStore() {
 				const monthlyPayment = calculateMonthlyMortgagePayment(
 					loanAmount,
 					interestRate,
-					termLength,
+					termLength * 12,
 					mortgageType
 				);
 
